@@ -1,4 +1,4 @@
-# GUDS - Geoserver Upload Download Script v0.1.1
+# GUDS - Geoserver Upload Download Script v0.1.2
 [![PyPI version](https://badge.fury.io/py/guds.svg)](https://badge.fury.io/py/guds)
 
 The GUDS repo contains a script for moving around the modeling data between its
@@ -10,7 +10,7 @@ source and the geoserver.
 
 * curl
 * Python 3.5 +
-* A geosver to push to
+* A geoserver to push to
 
 ### Install GUDS commandline
 To install GUDS, simply :
@@ -26,7 +26,6 @@ To do install it from source:
 `pip install -r reqquirements.txt`
 
 ## Usage
-
 
 `guds -f <filename> -t <upload data type>  -b <basin name> -m <mask netcdf>`
 
