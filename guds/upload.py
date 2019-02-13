@@ -3,7 +3,7 @@ import argparse
 import sys
 import requests
 from urllib.parse import urljoin, urlparse
-from shutil import copyfile
+from shutil import copyfile, rmtree
 import os
 from netCDF4 import Dataset, num2date
 from subprocess import check_output
@@ -16,6 +16,7 @@ from datetime import datetime as dt
 import numpy as np
 from guds import __version__
 
+
 class AWSM_Geoserver(object):
     def __init__(self, fname, log=None, debug=False, bypass=False):
 
@@ -26,8 +27,10 @@ class AWSM_Geoserver(object):
             self.log = log
 
         if debug:
+            self.debug = debug
             level='DEBUG'
         else:
+            self.debug = False
             level="INFO"
 
         # Assign some colors and formats
@@ -35,7 +38,7 @@ class AWSM_Geoserver(object):
                                                                logger=self.log)
 
         self.log.info("\n=============================================\n"
-                      "      Geoserver Upload Script v{}:\n"
+                      "      Geoserver Upload Script v{}\n"
                       "=============================================\n"
                       "".format(__version__))
 
@@ -70,6 +73,12 @@ class AWSM_Geoserver(object):
                           "mask":["mask"],}
         #  Manage the ranges
         self.ranges = {}
+
+        self.tmp = './tmp'
+
+        # Make a temporary folder for files
+        if not os.path.isdir(self.tmp):
+            os.mkdir(self.tmp)
 
 
     def make(self, resource, payload):
@@ -225,6 +234,8 @@ class AWSM_Geoserver(object):
                 fname = bname
                 mask_exlcude = ['mask']
 
+            fname = os.path.join(self.tmp, fname)
+
             # Create a copy
             self.log.info("Copying netcdf...")
             new_ds = copy_nc(ds, fname, exclude = exclude_vars)
@@ -291,11 +302,12 @@ class AWSM_Geoserver(object):
         cmd.append(fname)
         cmd.append("{}@{}:{}".format(self.username, self.base_url, final_fname))
 
-        try:
-            s = check_output(cmd, shell=False, universal_newlines=True)
-        except Exception as e:
-            self.log.error(e)
-            copyfile(fname,final_fname)
+        #try:
+        s = check_output(cmd, shell=False, universal_newlines=True)
+        self.log.info(s)
+        # except Exception as e:
+        #     self.log.error(e)
+        #     copyfile(fname,final_fname)
 
         return final_fname
 
@@ -535,10 +547,11 @@ class AWSM_Geoserver(object):
                "-XPUT", "-H", '"accept:text/xml"', "-H",'"content-type:text/xml"',
                urljoin(self.url,resource+'.xml'), "-d",
                ('"<layer><defaultStyle><name>{}</name></defaultStyle></layer>"'
-               "".format(colormap)),
-               "-v"]
+               "".format(colormap)), '-s']
+
         self.log.debug("Executing hack:\n{}".format(" ".join(cmd)))
         s = check_output(" ".join(cmd), shell=True, universal_newlines=True)
+        self.log.debug(s)
         rjson = self.get(resource)
 
 
@@ -623,6 +636,12 @@ class AWSM_Geoserver(object):
 
         else:
             raise ValueError("Invalid upload type!")
+
+        # Cleanup
+        #if not self.debug:
+        self.log.info("Cleaning up files... Removing {}".format(self.tmp))
+        rmtree(self.tmp)
+        self.log.info("Complete!\n")
 
     def submit_topo(self, filename, basin, layers=None):
         """
@@ -728,24 +747,27 @@ def ask_user(msg, bypass=False):
 
     return response
 
-def write_json():
+def write_json(bypass=False):
     """
     Writes a blank json with all the keys required to run the script
     """
     fname = "./geoserver.json"
+    ans = False
 
+    # Ask user to overwrite
     if os.path.isfile(fname):
         ans = ask_user("You are about to overwrite an existing file to write"
                        " your credentials json, do you want to continue?",
-                       bypass=self.bypass)
-        if ans:
+                       bypass=bypass)
+        if not ans:
+            sys.exit()
 
-            with open(fname, 'w') as fp:
-                line = \
-                ('{"url":"",\n"remote_username":"",\n"geoserver_username":"",\n'
-                '"geoserver_password":"",\n"pem":"",\n"data":""}\n')
-                fp.write(line)
-                fp.close()
+    with open(fname, 'w') as fp:
+        line = \
+        ('{"url":"",\n"remote_username":"",\n"geoserver_username":"",\n'
+        '"geoserver_password":"",\n"pem":"",\n"data":""}\n')
+        fp.write(line)
+        fp.close()
 
 
 def main():
@@ -798,7 +820,7 @@ def main():
 
     # User requested a geoserver.json file to fill out.
     if args.write_json:
-        write_json()
+        write_json(args.bypass)
     else:
         # Get an instance to interact with the geoserver.
         gs = AWSM_Geoserver(args.credentials, debug=args.debug, bypass=args.bypass)

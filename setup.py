@@ -20,6 +20,7 @@ setup(
     version='0.1.3',
     description="guds is an upload/ download script for moving data to and from the geoserver for AWSM data products",
     long_description=readme + '\n\n' + history,
+    long_description_content_type='text/markdown',
     author="Micah Johnson",
     author_email='micah.johnson150@gmail.com',
     url='https://github.com/USDA-ARS-NWRC/guds',
