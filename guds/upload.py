@@ -14,8 +14,7 @@ from spatialnc.proj import add_proj
 from spatialnc.utilities import copy_nc, mask_nc
 from datetime import datetime as dt
 import numpy as np
-
-__version__ = '0.1.0'
+from guds import __version__
 
 class AWSM_Geoserver(object):
     def __init__(self, fname, log=None, level="DEBUG"):
@@ -42,7 +41,7 @@ class AWSM_Geoserver(object):
         self.geoserver_password = cred['geoserver_password']
         self.geoserver_username = cred['geoserver_username']
         self.url = urljoin(cred['url'], 'rest/')
-        self.username = cred['remote_user']
+        self.username = cred['remote_username']
         # Extract the base url
         self.base_url = urlparse(self.url).netloc
         self.credential = (self.geoserver_username, self.geoserver_password)
@@ -699,6 +698,23 @@ def ask_user(msg):
             self.log.info("Unrecognized answer, please use (y, yes, n, no)")
     return response
 
+def write_json():
+    """
+    Writes a blank json with all the keys required to run the script
+    """
+    fname = "./geoserver.json"
+
+    if os.path.isfile(fname):
+        ans = ask_user("You are about to overwrite an existing file to write your credentials json, do you want to continue?")
+        if ans:
+
+            with open(fname, 'w') as fp:
+                line = \
+                ('{"url":"",\n"remote_username":"",\n"geoserver_username":"",\n'
+                '"geoserver_password":"",\n"pem":"",\n"data":""}\n')
+                fp.write(line)
+                fp.close()
+
 
 def main():
     # Parge command line arguments
@@ -707,13 +723,12 @@ def main():
                                             " modeling results to a geoserver")
 
     p.add_argument('-f','--filename', dest='filename',
-                    required=True,
                     help="Path to a file containing either a lidar flight,"
                     "AWSM/SMRF topo image, or AWSM modeling results or shapefiles"
                     )
 
     p.add_argument('-b','--basin', dest='basin',
-                    required=True, choices=['brb', 'kaweah', 'kings', 'lakes', 'merced', 'sanjoaquin'],
+                    choices=['brb', 'kaweah', 'kings', 'lakes', 'merced', 'sanjoaquin'],
                     help="Basin name to submit to which is also the geoserver"
                          " workspace name")
 
@@ -737,16 +752,23 @@ def main():
                     type=str, default=None,
                     help="Netcdf containing a mask layer")
 
+    p.add_argument('--write_json', dest='write_json', action='store_true',
+                    help="Creates a blank geoserver.json file to fill out")
+
 
     args = p.parse_args()
 
-    # Get an instance to interact with the geoserver.
-    gs = AWSM_Geoserver(args.credentials)
+    # User requested a geoserver.json file to fill out.
+    if args.write_json:
+        write_json()
+    else:
+        # Get an instance to interact with the geoserver.
+        gs = AWSM_Geoserver(args.credentials)
 
-    # Upload a file
-    gs.upload(args.basin,args.filename, upload_type=args.upload_type,
-                                        espg=args.espg,
-                                        mask=args.mask)
+        # Upload a file
+        gs.upload(args.basin,args.filename, upload_type=args.upload_type,
+                                            espg=args.espg,
+                                            mask=args.mask)
 
 
 if __name__ =='__main__':

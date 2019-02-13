@@ -5,45 +5,35 @@
 
 from setuptools import setup, find_packages
 
-with open('README.rst') as readme_file:
+with open('README.md') as readme_file:
     readme = readme_file.read()
 
-with open('docs/history.rst') as history_file:
+with open('history.md') as history_file:
     history = history_file.read()
 
-with open('requirements_dev.txt') as req_file:
+with open('requirements.txt') as req_file:
     requirements = req_file.read()
 
 
-setup_requirements = [
-    'pytest-runner',
-    # TODO(micahjohnson150): put setup requirements (distutils extensions, etc.) here
-]
-
-test_requirements = [
-    'pytest',
-    # TODO: put package test requirements here
-]
-
 setup(
-    name='inicheck',
-    version='0.3.3',
-    description="inicheck is an high level configuration file checker enabling developers tight control over their users configuration files",
+    name='guds',
+    version='0.1.0',
+    description="guds is an upload/ download script for moving data to and from the geoserver for AWSM data products",
     long_description=readme + '\n\n' + history,
     author="Micah Johnson",
     author_email='micah.johnson150@gmail.com',
-    url='https://github.com/micahjohnson150/inicheck',
-    packages=find_packages(include=['inicheck']),
+    url='https://github.com/USDA-ARS-NWRC/guds',
+    packages=find_packages(include=['guds']),
     entry_points={
         'console_scripts': [
-            'guds=upload:main'
+            'guds=guds.upload:main'
         ]
     },
     include_package_data=True,
     install_requires=requirements,
     license="GNU General Public License v3",
     zip_safe=False,
-    keywords='inicheck',
+    keywords=['guds', 'geoserver', 'modeling'],
     classifiers=[
         'Development Status :: 2 - Pre-Alpha',
         'Intended Audience :: Developers',
@@ -52,7 +42,4 @@ setup(
         'Programming Language :: Python :: 3.5',
         'Programming Language :: Python :: 3.6',
     ],
-    test_suite='tests',
-    tests_require=test_requirements,
-    setup_requires=setup_requirements,
 )
