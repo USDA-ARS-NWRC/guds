@@ -17,7 +17,7 @@ with open('requirements.txt') as req_file:
 
 setup(
     name='guds',
-    version='0.1.4',
+    version='0.1.5',
     description="guds is an upload/ download script for moving data to and from the geoserver for AWSM data products",
     long_description=readme + '\n\n' + history,
     long_description_content_type='text/markdown',
