@@ -783,7 +783,7 @@ def main():
 
     p.add_argument('-b','--basin', dest='basin',
                     choices=['brb', 'kaweah', 'kings', 'lakes', 'merced',
-                             'sanjoaquin'],
+                             'sanjoaquin','tuolumne'],
                     help="Basin name to submit to which is also the geoserver"
                          " workspace name")
 
