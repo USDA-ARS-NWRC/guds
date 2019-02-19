@@ -15,10 +15,10 @@ from spatialnc.utilities import copy_nc, mask_nc
 from datetime import datetime as dt
 import numpy as np
 from guds import __version__
-
+import time
 
 class AWSM_Geoserver(object):
-    def __init__(self, fname, log=None, debug=False, bypass=False):
+    def __init__(self, fname, log=None, debug=False, bypass=False, cleanup=True):
 
         # Setup external logging if need be
         if log==None:
@@ -32,6 +32,8 @@ class AWSM_Geoserver(object):
         else:
             self.debug = False
             level="INFO"
+
+        self.cleanup = cleanup
 
         # Assign some colors and formats
         coloredlogs.install(fmt='%(levelname)-5s %(message)s', level=level,
@@ -74,7 +76,7 @@ class AWSM_Geoserver(object):
         #  Manage the ranges
         self.ranges = {}
 
-        self.tmp = './tmp'
+        self.tmp = 'tmp'
 
         # Make a temporary folder for files
         if not os.path.isdir(self.tmp):
@@ -100,7 +102,7 @@ class AWSM_Geoserver(object):
             request_url,
             headers=headers,
             data=json.dumps(payload),
-            verify=False,
+            verify=True,
             auth=self.credential
         )
 
@@ -126,7 +128,7 @@ class AWSM_Geoserver(object):
         r = requests.delete(
             request_url,
             headers=headers,
-            verify=False,
+            verify=True,
             auth=self.credential
         )
         self.log.debug("Response from DELETE: {}".format(r))
@@ -176,7 +178,7 @@ class AWSM_Geoserver(object):
 
         r = requests.get(
             request_url,
-            verify=False,
+            verify=True,
             headers=headers,
             auth=self.credential
         )
@@ -228,13 +230,17 @@ class AWSM_Geoserver(object):
 
             elif upload_type=='topo':
                 self.date = dt.today().isoformat().split('T')[0]
-                cleaned_date = "".join([c for c in date.isoformat() \
-                                        if c not in ':-'])[:-2]
-                bname = bname.split(".")[0] + "_{}.nc".format(cleaned_date)
+                #cleaned_date = "".join([c for c in self.date.isoformat() \
+                #                        if c not in ':-'])[:-2]
+                bname = bname.split(".")[0] + "_{}.nc".format(self.date)
                 fname = bname
                 mask_exlcude = ['mask']
+                keep_vars = ds.variables.keys()
+                mask = fname
 
             fname = os.path.join(self.tmp, fname)
+            exclude_vars = [v for v in ds.variables.keys() \
+                            if v not in keep_vars]
 
             # Create a copy
             self.log.info("Copying netcdf...")
@@ -249,7 +255,10 @@ class AWSM_Geoserver(object):
             if mask != None:
                 self.log.info("Masking netcdf using {}...".format(mask))
                 new_ds.close() # close the last one
-                new_ds = mask_nc(fname, mask, exclude=mask_exlcude)
+                new_ds = mask_nc(fname, mask, exclude=mask_exlcude,
+                                              output=self.tmp)
+                fname = new_ds.filepath()
+
 
             # Check for missing projection
             if 'projection' not in new_ds.variables:
@@ -290,7 +299,6 @@ class AWSM_Geoserver(object):
         final_fname = os.path.join(self.data, basin, bname)
         self.log.info("Copying local data to remote, this may take a couple "
                       "minutes...")
-        self.log.debug("SCP info:{} -----> {}".format(bname, final_fname))
 
         # Form the SCP command, handle if there is no pem file
         cmd = ["scp"]
@@ -301,13 +309,10 @@ class AWSM_Geoserver(object):
 
         cmd.append(fname)
         cmd.append("{}@{}:{}".format(self.username, self.base_url, final_fname))
+        self.log.debug(" ".join(cmd))
 
-        #try:
         s = check_output(cmd, shell=False, universal_newlines=True)
         self.log.info(s)
-        # except Exception as e:
-        #     self.log.error(e)
-        #     copyfile(fname,final_fname)
 
         return final_fname
 
@@ -481,11 +486,10 @@ class AWSM_Geoserver(object):
         resource = ("workspaces/{}/coveragestores/{}/coverages.json"
                    "".format(basin, store))
 
-        # Rename the isnobal stuff
-        lyr_name = layer#.lower().replace(" ","_").replace('-','')
+        lyr_name = layer.replace(" ","_").replace('-','')
         native_name = lyr_name#layer.replace('_',' ')
 
-        # Make the names better
+        # Make the names better/ Rename the isnobal stuff
         if native_name in ['snow_density','specific_mass','thickness']:
             name = self.remap[native_name]
         else:
@@ -516,7 +520,8 @@ class AWSM_Geoserver(object):
 
         #If we have ranges for the layer, use it.
         if lyr_name in self.ranges.keys():
-            self.log.info("Adding range for the image...")
+            self.log.info("Setting range for {} to {}..."
+                          "".format(lyr_name, self.ranges[lyr_name]))
             payload["coverage"]["dimensions"] = {"coverageDimension":[
                         {"name":"{}".format(name),
                          "range":{"min":"{}".format(self.ranges[lyr_name][0]),
@@ -547,7 +552,7 @@ class AWSM_Geoserver(object):
                "-XPUT", "-H", '"accept:text/xml"', "-H",'"content-type:text/xml"',
                urljoin(self.url,resource+'.xml'), "-d",
                ('"<layer><defaultStyle><name>{}</name></defaultStyle></layer>"'
-               "".format(colormap)), '-s']
+               "".format(colormap)),'-s']
 
         self.log.debug("Executing hack:\n{}".format(" ".join(cmd)))
         s = check_output(" ".join(cmd), shell=True, universal_newlines=True)
@@ -597,10 +602,22 @@ class AWSM_Geoserver(object):
         self.log.info("Source Filename: {}".format(filename))
         self.log.info("Mask Filename: {}".format(mask))
 
+        if not os.path.isfile(filename):
+            self.log.error("Upload file doesn't exist.")
+            sys.exit()
+
+        if mask != None:
+            if not os.path.isfile(mask):
+                self.log.error("Mask file doesn't exist.")
+                sys.exit()
+
         # Ensure that this workspace exists
         if not self.exists(basin):
 
             self.create_basin(basin)
+
+        # Timing
+        self.start = time.time()
 
         # Reduce the size of netcdfs if possible return the new filename
         filename = self.extract_data(filename, upload_type=upload_type,
@@ -638,9 +655,12 @@ class AWSM_Geoserver(object):
             raise ValueError("Invalid upload type!")
 
         # Cleanup
-        #if not self.debug:
-        self.log.info("Cleaning up files... Removing {}".format(self.tmp))
-        rmtree(self.tmp)
+        if self.cleanup:
+            self.log.info("Cleaning up files... Removing {}".format(self.tmp))
+            rmtree(self.tmp)
+
+        # Timing
+        self.log.info("Upload took: {0:0.1f}s".format(time.time() - self.start))
         self.log.info("Complete!\n")
 
     def submit_topo(self, filename, basin, layers=None):
@@ -661,6 +681,7 @@ class AWSM_Geoserver(object):
         description = ("NetCDF file containing topographic images required for"
                        " modeling the {} watershed in AWSM.\n"
                        "Uploaded: {}").format(basin, self.date)
+
         self.create_coveragestore(basin, store_name, filename,
                                                      description=description)
 
@@ -687,7 +708,7 @@ class AWSM_Geoserver(object):
         # Create Netcdf store
         description = ("NetCDF file containing modeled snowpack images from "
                        "the {} watershed produced by AWSM.\n"
-                       "Model Date: {}"
+                       "Model Date: {}\n"
                        "Date Uploaded: {}").format(basin,
                                        self.date,
                                        dt.today().isoformat().split('T')[0])
@@ -809,12 +830,18 @@ def main():
 
     p.add_argument('--write_json', dest='write_json', action='store_true',
                     help="Creates a blank geoserver.json file to fill out")
+
     p.add_argument('-d','--debug', dest='debug', action='store_true',
                     help="Creates a blank geoserver.json file to fill out")
+
     p.add_argument('-y','--bypass', dest='bypass', action='store_true',
                     help="Answers yes to all the questions. It is important to"
                     " not use unless you are very confident you have the"
                     " correct names.")
+
+    p.add_argument('-ncu','--no_cleanup', dest='cleanup', action='store_false',
+                    help="When used, it doesn't clean up the files it creates."
+                    " Not to be used for other than debugging.")
 
     args = p.parse_args()
 
@@ -823,12 +850,14 @@ def main():
         write_json(args.bypass)
     else:
         # Get an instance to interact with the geoserver.
-        gs = AWSM_Geoserver(args.credentials, debug=args.debug, bypass=args.bypass)
+        gs = AWSM_Geoserver(args.credentials, debug=args.debug,
+                                              bypass=args.bypass,
+                                              cleanup=args.cleanup)
 
         # Upload a file
-        gs.upload(args.basin,args.filename, upload_type=args.upload_type,
-                                            espg=args.espg,
-                                            mask=args.mask)
+        gs.upload(args.basin, args.filename, upload_type=args.upload_type,
+                                             espg=args.espg,
+                                             mask=args.mask)
 
 
 if __name__ =='__main__':
