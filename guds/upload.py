@@ -51,6 +51,7 @@ class AWSM_Geoserver(object):
         self.geoserver_password = cred['geoserver_password']
         self.geoserver_username = cred['geoserver_username']
         self.url = urljoin(cred['url'], 'rest/')
+
         self.username = cred['remote_username']
         self.bypass = bypass
 
@@ -230,8 +231,7 @@ class AWSM_Geoserver(object):
 
             elif upload_type=='topo':
                 self.date = dt.today().isoformat().split('T')[0]
-                #cleaned_date = "".join([c for c in self.date.isoformat() \
-                #                        if c not in ':-'])[:-2]
+
                 bname = bname.split(".")[0] + "_{}.nc".format(self.date)
                 fname = bname
                 mask_exlcude = ['mask']
@@ -364,7 +364,7 @@ class AWSM_Geoserver(object):
                 # Grab info about this existing workspace
                 ws_dict = self.get(w['href'])
 
-                # Grab info on rasters
+                # Grab info on any stores
                 cs_dict = self.get(ws_dict['workspace']['coverageStores'])
 
                 # Check if there are any coverage stores
@@ -378,7 +378,7 @@ class AWSM_Geoserver(object):
                             break
 
             # layer existance requested
-            if layer != None:
+            if layer != None and store_exists:
                 # Grab info about this existing store
                 store_info = self.get(cs['href'])
                 coverages = self.get(store_info['coverageStore']['coverages'])
@@ -420,7 +420,7 @@ class AWSM_Geoserver(object):
             sys.exit()
 
         else:
-            self.log.info("Creating a new basin on geoserver...")
+            self.log.info("Creating new basin {} on geoserver...".format(basin))
             payload = {'workspace': {'name':basin,
                                      'enabled':True}}
 
@@ -437,14 +437,15 @@ class AWSM_Geoserver(object):
                       geoserver
 
         """
+
         bname = os.path.basename(filename)
 
         # Check to see if the store already exists...
         if self.exists(basin, store=store):
             self.log.error("Coverage store {} exists!".format(store))
             sys.exit()
-            #resource = 'workspaces/{}/coveragestores/{}'.format(basin,store)
 
+            #resource = 'workspaces/{}/coveragestores/{}'.format(basin,store)
             #self.delete(resource)
         else:
             resource = 'workspaces/{}/coveragestores.json'.format(basin)
@@ -629,6 +630,7 @@ class AWSM_Geoserver(object):
 
         # Grab the layer names
         ds = Dataset(filename)
+
         layers = []
         for name, v in ds.variables.items():
             if name not in ['time','x','y','projection']:
@@ -717,7 +719,6 @@ class AWSM_Geoserver(object):
                                                      description=description)
 
         # Create layers density, specific mass, thickness
-
         self.create_layers_from_netcdf(basin, store_name, filename,
                                                           layers=layers)
 
