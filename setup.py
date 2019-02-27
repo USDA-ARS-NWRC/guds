@@ -4,9 +4,12 @@
 """The setup script."""
 
 from setuptools import setup, find_packages
+from os import path
 
-with open('README.md') as readme_file:
-    readme = readme_file.read()
+# read the contents of your README file
+this_directory = path.abspath(path.dirname(__file__))
+with open(path.join(this_directory, 'README.md'), encoding='utf-8') as f:
+    long_description = f.read()
 
 with open('history.md') as history_file:
     history = history_file.read()
@@ -17,8 +20,8 @@ with open('requirements.txt') as req_file:
 
 setup(
     name='guds',
-    version='0.1.6',
-    description="guds is an upload/ download script for moving data to and from the geoserver for AWSM data products",
+    version='0.2.0',
+    description="GUDS is a geoserver upload/download script for moving data to and from the geoserver for AWSM data products",
     long_description=readme + '\n\n' + history,
     long_description_content_type='text/markdown',
     author="Micah Johnson",

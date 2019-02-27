@@ -1,4 +1,4 @@
-# GUDS - Geoserver Upload Download Script v0.1.6
+# GUDS - Geoserver Upload Download Script v0.2.0
 [![PyPI version](https://badge.fury.io/py/guds.svg)](https://badge.fury.io/py/guds)
 
 The GUDS repo contains a script for moving around the modeling data between its
