@@ -22,7 +22,7 @@ setup(
     name='guds',
     version='0.2.0',
     description="GUDS is a geoserver upload/download script for moving data to and from the geoserver for AWSM data products",
-    long_description=readme + '\n\n' + history,
+    long_description=long_description + '\n\n' + history,
     long_description_content_type='text/markdown',
     author="Micah Johnson",
     author_email='micah.johnson150@gmail.com',
