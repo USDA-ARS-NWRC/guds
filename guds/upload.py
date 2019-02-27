@@ -16,6 +16,7 @@ from datetime import datetime as dt
 import numpy as np
 from guds import __version__
 import time
+import pandas as pd
 
 class AWSM_Geoserver(object):
     def __init__(self, fname, log=None, debug=False, bypass=False, cleanup=True):
@@ -108,6 +109,9 @@ class AWSM_Geoserver(object):
         )
 
         result = r.raise_for_status()
+
+        self.handle_status(resource,r.status_code)
+
         self.log.debug("POST request returns {}:".format(result))
         return result
 
@@ -132,7 +136,11 @@ class AWSM_Geoserver(object):
             verify=True,
             auth=self.credential
         )
+
+        self.handle_status(resource, r.status_code)
+
         self.log.debug("Response from DELETE: {}".format(r))
+
         return r.raise_for_status()
 
     def modify(self, resource, payload):
@@ -149,18 +157,43 @@ class AWSM_Geoserver(object):
 
         headers = {'accept':'application/json',
                    'content-type':'application/json'}
+
         request_url = urljoin(self.url, resource)
+
         self.log.debug("PUT request to {}".format(request_url))
+
         r = requests.put(
             request_url,
             headers=headers,
             json=payload,
             auth=self.credential
         )
+
+        self.handle_status(resource,r.status_code)
+
         self.log.debug("Response from PUT: {}".format(r))
+
         return r.raise_for_status()
 
-    def get(self, resource):
+    def handle_status(self, resource, code):
+        """
+        Handles logging code
+        """
+        msg = "Resource {}".format(resource)
+
+        if code == 404:
+            self.log.error(msg + " was not found on geoserver.".format(resource))
+            sys.exit()
+
+        elif code == 200:
+            self.log.debug(msg + " was found successfully!")
+
+        elif code == 302:
+            self.log.debug(msg + " was redirected.")
+        else:
+            self.log.debug("Status Code Recieved: {}".format(code))
+
+    def get(self, resource, headers = {'Accept':'application/json'}):
         """
         Wrapper for requests.get function.
         Retrieves info from the resource and returns the dictionary from the
@@ -173,7 +206,6 @@ class AWSM_Geoserver(object):
             dict: Dictionary containing infor about the resource
         """
 
-        headers = {'Accept':'application/json'}
         request_url = urljoin(self.url, resource)
         self.log.debug("GET request to {}".format(request_url))
 
@@ -183,9 +215,44 @@ class AWSM_Geoserver(object):
             headers=headers,
             auth=self.credential
         )
+
+        self.handle_status(resource, r.status_code)
+
         result = r.json()
         self.log.debug("GET Returns: {}".format(result))
+
         return result
+
+    def grab(self, resource, fname):
+        """
+        Wrapper for requests.get function.
+        Retrieves data from the resource and writes a file
+
+        Args:
+            resource: Relative location from the http root
+            fname: Name of the file to save
+        """
+
+        request_url = urljoin(self.url, resource)
+        self.log.debug("GET/GRAB request to {}".format(request_url))
+
+        r = requests.get(
+            request_url,
+            stream=True,
+            verify=True,
+            auth=self.credential,
+        )
+
+        self.handle_status(resource,r.status_code)
+
+        self.log.info("Writing data...".format(fname))
+        with open(fname,"wb") as fp:
+            for chunk in r.iter_content(chunk_size=1024):
+                 # writing one chunk at a time to pdf file
+                 if chunk:
+                     fp.write(chunk)
+
+        self.log.info("File Dowload complete. Written to {}".format(fname))
 
     def extract_data(self, fname, upload_type='modeled', espg=None, mask=None):
         """
@@ -560,7 +627,6 @@ class AWSM_Geoserver(object):
         self.log.debug(s)
         rjson = self.get(resource)
 
-
     def create_layers_from_netcdf(self, basin, store, filename, layers=None,):
         """
         Opens a netcdf locally and adds all layers to the geoserver that are in
@@ -736,6 +802,27 @@ class AWSM_Geoserver(object):
                         "using default").format(name))
         return "dynamic_default"
 
+    def download(self, basin, date_str, download_type="modeled"):
+        """
+        Downloads data
+        Args:
+            basin: String name of the basin.
+            date_str: String date of the file you want to download
+        """
+        date = pd.to_datetime(date_str)
+        date_str = "".join(date.isoformat().split('T')[0].split("-"))
+
+        if download_type == "modeled":
+            fname = "masked_snow_{}.nc".format(date_str)
+        else:
+            self.log.error("{} data downloads have not been develop yet!")
+            sys.exit()
+
+        self.log.info("Download Requested. Attempting to download {} from the {}.".format(fname, basin))
+
+        resource = "resource/basins/{}/{}".format(basin,fname)
+
+        self.grab(resource, fname)
 
 
 def ask_user(msg, bypass=False):
@@ -814,11 +901,11 @@ def main():
                     required=False,
                     help="JSON containing geoserver credentials for logging in")
 
-    p.add_argument('-t','--upload_type', dest='upload_type',
+    p.add_argument('-t','--data_type', dest='data_type',
                     default='modeled',
                     choices=['flight','topo','shapefile','modeled'],
                     required=False,
-                    help="Upload type dictates how some items are uploaded.")
+                    help="Upload/download type dictates how some items are uploaded/downloaded.")
 
     p.add_argument('-e','--espg', dest='espg',
                     type=int, default=None,
@@ -844,19 +931,28 @@ def main():
                     help="When used, it doesn't clean up the files it creates."
                     " Not to be used for other than debugging.")
 
+    p.add_argument('-do','--download', dest='download',
+                    help="Receives a date for downloading files")
+
     args = p.parse_args()
 
     # User requested a geoserver.json file to fill out.
     if args.write_json:
         write_json(args.bypass)
+
     else:
         # Get an instance to interact with the geoserver.
         gs = AWSM_Geoserver(args.credentials, debug=args.debug,
                                               bypass=args.bypass,
                                               cleanup=args.cleanup)
 
-        # Upload a file
-        gs.upload(args.basin, args.filename, upload_type=args.upload_type,
+        if args.download != None:
+            # Download a file
+            gs.download(args.basin, args.download, download_type=args.data_type)
+
+        else:
+            # Upload a file
+            gs.upload(args.basin, args.filename, upload_type=args.data_type,
                                              espg=args.espg,
                                              mask=args.mask)
 
