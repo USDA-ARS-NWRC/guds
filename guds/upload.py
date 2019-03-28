@@ -907,6 +907,8 @@ class AWSM_Geoserver(object):
         resource = "styles/"
         existing_styles = self.get(resource)
         existing_styles = [style['name'] for style in existing_styles['styles']['style']]
+        self.log.info("Uploading {} styles.".format(len(local_files)))
+        self.log.info("{} styles already exist.".format(len(existing_styles)))
 
         for f in local_files:
             skip = False
