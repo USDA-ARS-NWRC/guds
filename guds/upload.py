@@ -557,7 +557,7 @@ class AWSM_Geoserver(object):
         # Check to see if the store already exists...
         if self.exists(basin, store=store):
 
-            self.log.error("Coverage store {} exists!".format(store))
+            self.log.warn("Coverage store {} exists!".format(store))
 
             # Check to see if user wants to delete it and rewrite it
             ans = ask_user("Do you want to overwrite coveragestore {}?"
@@ -657,44 +657,71 @@ class AWSM_Geoserver(object):
         response = self.make(resource, payload)
 
         # Assign Colormaps
-        # colormap =
+        self.assign_colormaps(basin, name)
+
+    def assign_colormaps(self, basin, name):
+        """
+        currently utilizes a hacky version to accomplish our goal. function
+        Assigns the colormaps to default and styles available
+
+        Args:
+            basin: name of the basin
+            name: name of the layer
+        """
+
         resource = ("layers/{}:{}".format(basin, name))
 
-        # Get the automated layer
-        rjson = self.get(resource)
 
+        # All colormaps we want to assign
         colormaps = self.get_keyword_styles(name)
+
+        # Default colormap
         if "dynamic_default" in colormaps:
             colormap = "dynamic_default"
         else:
             colormap = "raster"
+        self.log.info("Assigning {} as default colormap.".format(colormap))
 
-        self.log.info("Assigning {} colormap.".format(colormap))
-        self.log.debug("Assigning available colormaps:\n".format("\n".join(colormaps)))
-        rjson["layer"]["defaultStyle"] = {"name": colormap}
-        rjson["layer"]["opaque"] = True
+        # ##################### Correct way but doesn't work ####################
+        #
+        # rjson['layer']["styles"] = {"style": [{"name":cm} for cm in colormaps]}
+        # rjson["layer"]["defaultStyle"] = {"name": colormap}
+        #
+        # rjson["layer"]["opaque"] = True
+        #
+        #r = self.modify(resource, {"layer":{"defaultStyle":{"name":colormap}}})
 
-        payload = {"layer":{"defaultStyle":{"name": "dynamic_default"}}}
 
-        #r = self.modify(resource,payload)
+        ##################### HACK VERSION #####################################
+        xml_colormaps = ["\t\t<style><name>{}</name></style>".format(cm) for cm in colormaps]
+        xml_colormaps = "\n".join(xml_colormaps)
+        xml_entry = "<layer><defaultStyle><name>{}</name></defaultStyle></layer>".format(colormap)
 
-        cmd = ["curl","-u","{}:{}".format(self.geoserver_username,
+        base_cmd = ["curl","-u","{}:{}".format(self.geoserver_username,
                                           self.geoserver_password),
                "-XPUT", "-H", '"accept:text/xml"', "-H",'"content-type:text/xml"',
-               urljoin(self.url,resource+'.xml'), "-d",
-               ('"<layer><defaultStyle><name>{}</name></defaultStyle></layer>"'
-               "".format(colormap)),'-s']
+               urljoin(self.url,resource+'.xml'),"-s","-d"]
 
+        # Add the default style
+        cmd = base_cmd + ['"{}"'.format(xml_entry)]
         self.log.debug("Executing hack:\n{}".format(" ".join(cmd)))
         s = sp.check_output(" ".join(cmd), shell=True, universal_newlines=True)
         self.log.debug(s)
 
-        rjson = self.get(resource)
+        # Add all the styles available
+        xml_entry = "<layer><styles>{}</styles></layer>".format(xml_colormaps)
+        cmd = base_cmd + ['"{}"'.format(xml_entry)]
+        self.log.debug("Executing hack:\n{}".format(" ".join(cmd)))
+        s = sp.check_output(" ".join(cmd), shell=True, universal_newlines=True)
+        self.log.debug(s)
 
     def get_keyword_styles(self, layer_name):
         """
         Returns all the styles that has keywords matching in the layer_name
         and in the style name for rasters only
+
+        Args:
+            layer_name: Name of the layer being made
         """
 
         styles = self.get('styles/')
@@ -704,16 +731,16 @@ class AWSM_Geoserver(object):
         # Filter the styles
         for key in self.colormaps_keys:
             for style in avail:
-                if key in style.lower():
+                if key in style.lower() and key in layer_name.lower():
                     result.append(style)
 
-        self.log.debug("Availables Styles:\n{}".format(pformat(avail)))
+        self.log.info("{}/{} availables styles are matching".format(len(result), len(avail)))
 
-
-        if "dyanamic_default" in styles:
+        # Add in dyanamic_default default if it is there
+        if "dynamic_default" in avail:
             result.append('dynamic_default')
 
-        return avail
+        return result
 
     def create_layers_from_netcdf(self, basin, store, filename, layers=None,):
         """
@@ -929,7 +956,7 @@ class AWSM_Geoserver(object):
 
             # Upload that bad boy
             if not skip:
-                self.log.info("Adding the style {}  to the geoserver...".format(style_name))
+                self.log.info("Adding the {} style to the geoserver...".format(style_name))
                 payload = {"style":{"name":style_name, "filename":f}}
                 resource = "styles/"
 
@@ -1068,8 +1095,9 @@ def main():
                     args.filenames = [args.filenames]
                 gs.submit_styles(args.filenames)
             else:
+
                 # Upload a file
-                gs.upload(args.basin, args.filenames, upload_type=args.data_type,
+                gs.upload(args.basin, args.filenames[0], upload_type=args.data_type,
                                                      espg=args.espg,
                                                      mask=args.mask)
 
