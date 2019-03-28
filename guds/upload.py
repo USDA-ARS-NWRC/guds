@@ -82,18 +82,17 @@ class AWSM_Geoserver(object):
                       'thickness':'depth'}
 
         # Auto assign layers to colormaps
-        self.colormaps = {"dynamic_default":["depth","density","swe", "dem",
-                                             "veg_tau","veg_k","veg_type",
-                                             "veg_height"],
-                          "mask":["mask"],}
-        #  Manage the ranges
-        self.ranges = {}
-
+        self.colormaps_keys = ["depth","density","swe", "dem",
+                            "veg","height","mask"]
+        # temporary directory
         self.tmp = 'tmp'
 
         # Make a temporary folder for files
         if not os.path.isdir(self.tmp):
             os.mkdir(self.tmp)
+
+        # A location to store image ranges
+        self.ranges = {}
 
         # Some basin info
         self.log.info("URL:{}".format(self.url))
@@ -396,8 +395,8 @@ class AWSM_Geoserver(object):
         self.log.debug(" ".join(cmd))
 
         try:
-
-            s = sp.check_output(cmd, shell=False, universal_newlines=True)
+            pass
+            #s = sp.check_output(cmd, shell=False, universal_newlines=True)
 
         except Exception as e:
             self.log.error(e.output)
@@ -561,7 +560,7 @@ class AWSM_Geoserver(object):
             payload['coverageStore']["description"] = description
 
         create_cs = ask_user("You are about to create a new geoserver"
-                             " coverage store called: {} in the {}\n Are "
+                             " coverage store called: {} in the {}\nAre "
                              " you sure you want to continue?"
                              "".format(store, basin), bypass=self.bypass)
         if not create_cs:
@@ -609,7 +608,6 @@ class AWSM_Geoserver(object):
         if hasattr(self,'date'):
             name = "{}{}".format(name, self.date.replace('-',''))
 
-        colormap = self.assign_cmap(name)
         payload = {"coverage":{"name":name,
                                "nativeName":lyr_name,
                                "nativeCoverageName":native_name,
@@ -618,7 +616,7 @@ class AWSM_Geoserver(object):
                                "title":title,
                                }}
 
-        #If we have ranges for the layer, use it.
+        # If we have ranges for the layer, use it.
         if lyr_name in self.ranges.keys():
             self.log.info("Setting range for {} to {}..."
                           "".format(lyr_name, self.ranges[lyr_name]))
@@ -633,13 +631,20 @@ class AWSM_Geoserver(object):
         response = self.make(resource, payload)
 
         # Assign Colormaps
-        colormap = self.assign_cmap(name)
+        # colormap =
         resource = ("layers/{}:{}".format(basin, name))
 
         # Get the automated layer
         rjson = self.get(resource)
 
+        colormaps = self.get_keyword_styles(name)
+        if "dynamic_default" in colormaps:
+            colormap = "dynamic_default"
+        else:
+            colormap = "raster"
+
         self.log.info("Assigning {} colormap.".format(colormap))
+        self.log.debug("Assigning available colormaps:\n".format("\n".join(colormaps)))
         rjson["layer"]["defaultStyle"] = {"name": colormap}
         rjson["layer"]["opaque"] = True
 
@@ -657,7 +662,32 @@ class AWSM_Geoserver(object):
         self.log.debug("Executing hack:\n{}".format(" ".join(cmd)))
         s = sp.check_output(" ".join(cmd), shell=True, universal_newlines=True)
         self.log.debug(s)
+
         rjson = self.get(resource)
+
+    def get_keyword_styles(self, layer_name):
+        """
+        Returns all the styles that has keywords matching in the layer_name
+        and in the style name for rasters only
+        """
+
+        styles = self.get('styles/')
+        avail = [k['name'] for  k in styles['styles']['style']]
+        result = []
+
+        # Filter the styles
+        for key in self.colormaps_keys:
+            for style in avail:
+                if key in style.lower():
+                    result.append(style)
+
+        self.log.debug("Availables Styles:\n{}".format(pformat(avail)))
+
+
+        if "dyanamic_default" in styles:
+            result.append('dynamic_default')
+
+        return avail
 
     def create_layers_from_netcdf(self, basin, store, filename, layers=None,):
         """
@@ -820,20 +850,6 @@ class AWSM_Geoserver(object):
         # Create layers density, specific mass, thickness
         self.create_layers_from_netcdf(basin, store_name, filename,
                                                           layers=layers)
-
-    def assign_cmap(self, name):
-        """
-        Uses attributes from class to determine is a layer name is associated
-        to a colormap
-        """
-        for cmap,layer_list in self.colormaps.items():
-            for layer in layer_list:
-                if name.lower() in layer:
-                    return cmap
-
-        self.log.warning(("Layer {} does not have an assigned colormap, "
-                        "using default").format(name))
-        return "dynamic_default"
 
     def download(self, basin, date_str, download_type="modeled"):
         """
