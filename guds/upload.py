@@ -6,7 +6,7 @@ from urllib.parse import urljoin, urlparse
 from shutil import copyfile, rmtree
 import os
 from netCDF4 import Dataset, num2date
-from subprocess import check_output
+import subprocess as sp
 import logging
 import coloredlogs
 import certifi
@@ -17,6 +17,8 @@ import numpy as np
 from guds import __version__
 import time
 import pandas as pd
+from pprint import pformat
+
 
 class AWSM_Geoserver(object):
     def __init__(self, fname, log=None, debug=False, bypass=False, cleanup=True):
@@ -39,10 +41,9 @@ class AWSM_Geoserver(object):
         # Assign some colors and formats
         coloredlogs.install(fmt='%(levelname)-5s %(message)s', level=level,
                                                                logger=self.log)
-
-        self.log.info("\n=============================================\n"
-                      "      Geoserver Upload Script v{}\n"
-                      "=============================================\n"
+        self.log.info("\n================================================\n"
+                        " Geoserver Upload/Download Script (GUDS) v{}\n"
+                        "================================================\n"
                       "".format(__version__))
 
         with open(fname) as fp:
@@ -51,13 +52,23 @@ class AWSM_Geoserver(object):
 
         self.geoserver_password = cred['geoserver_password']
         self.geoserver_username = cred['geoserver_username']
-        self.url = urljoin(cred['url'], 'rest/')
+
+        # setup the URL
+        self.url = cred['url']
+        if self.url[-1] != '/':
+            self.url +='/'
+        self.url = urljoin(self.url,'rest/')
 
         self.username = cred['remote_username']
         self.bypass = bypass
 
         # Extract the base url
         self.base_url = urlparse(self.url).netloc
+
+        # Handle IP addresses and ports
+        if ":" in self.base_url:
+            self.base_url = "".join(self.base_url.split(":")[0:-1])
+
         self.credential = (self.geoserver_username, self.geoserver_password)
 
         if 'pem' in cred.keys():
@@ -84,6 +95,9 @@ class AWSM_Geoserver(object):
         if not os.path.isdir(self.tmp):
             os.mkdir(self.tmp)
 
+        # Some basin info
+        self.log.info("URL:{}".format(self.url))
+        self.log.debug("Base URL: {}".format(self.base_url))
 
     def make(self, resource, payload):
         """
@@ -115,13 +129,13 @@ class AWSM_Geoserver(object):
         self.log.debug("POST request returns {}:".format(result))
         return result
 
-    def delete(self, resource):
+    def delete(self, resource, **kwargs):
         """
         Wrapper for delete request.
 
         Args:
             resource: Relative location from the http root
-            payload: Dictionary containing data to transfer.
+            kwargs: Any pass through items that the request will take
 
         Returns:
             string: request status
@@ -130,11 +144,13 @@ class AWSM_Geoserver(object):
         headers = {'content-type':'application/json'}
         request_url = urljoin(self.url, resource)
         self.log.debug("PUT request to {}".format(request_url))
+
         r = requests.delete(
             request_url,
             headers=headers,
             verify=True,
-            auth=self.credential
+            auth=self.credential,
+            params=kwargs
         )
 
         self.handle_status(resource, r.status_code)
@@ -193,6 +209,7 @@ class AWSM_Geoserver(object):
         else:
             self.log.debug("Status Code Recieved: {}".format(code))
 
+
     def get(self, resource, headers = {'Accept':'application/json'}):
         """
         Wrapper for requests.get function.
@@ -219,7 +236,7 @@ class AWSM_Geoserver(object):
         self.handle_status(resource, r.status_code)
 
         result = r.json()
-        self.log.debug("GET Returns: {}".format(result))
+        self.log.debug("GET Returns: {}".format(pformat(result)))
 
         return result
 
@@ -378,8 +395,13 @@ class AWSM_Geoserver(object):
         cmd.append("{}@{}:{}".format(self.username, self.base_url, final_fname))
         self.log.debug(" ".join(cmd))
 
-        s = check_output(cmd, shell=False, universal_newlines=True)
-        self.log.info(s)
+        try:
+
+            s = sp.check_output(cmd, shell=False, universal_newlines=True)
+
+        except Exception as e:
+            self.log.error(e.output)
+            raise e
 
         return final_fname
 
@@ -509,37 +531,47 @@ class AWSM_Geoserver(object):
 
         # Check to see if the store already exists...
         if self.exists(basin, store=store):
+
             self.log.error("Coverage store {} exists!".format(store))
-            sys.exit()
 
-            #resource = 'workspaces/{}/coveragestores/{}'.format(basin,store)
-            #self.delete(resource)
-        else:
-            resource = 'workspaces/{}/coveragestores.json'.format(basin)
+            # Check to see if user wants to delete it and rewrite it
+            ans = ask_user("Do you want to overwrite coveragestore {}?"
+                           "".format(store), bypass=self.bypass)
 
-            payload = {"coverageStore":{"name":store,
-                                        "type":"NetCDF",
-                                        "enabled":True,
-                                        "_default":False,
-                                        "workspace":{"name": basin},
-                                        "configure":"all",
-                                        "url":"file:basins/{}/{}".format(basin,
-                                        bname)}}
-            if description != None:
-                payload['coverageStore']["description"] = description
+            if ans:
+                resource = "workspaces/{}/coveragestores/{}.json".format(basin, store)
+                self.delete(resource, recurse=True)
 
-            create_cs = ask_user("You are about to create a new geoserver"
-                                 " coverage store called: {} in the {}\n Are "
-                                 " you sure you want to continue?"
-                                 "".format(store, basin), bypass=self.bypass)
-            if not create_cs:
-                self.log.info("Aborting creating a new coverage store."
-                              "Exiting...")
-                sys.exit()
             else:
-                self.log.info("Creating a new coverage on geoserver...")
-                self.log.debug(payload)
-                rjson = self.make(resource, payload)
+                self.log.info("Unable to continue, exiting...")
+                sys.exit()
+
+        # Make the coverage store!
+        resource = 'workspaces/{}/coveragestores.json'.format(basin)
+
+        payload = {"coverageStore":{"name":store,
+                                    "type":"NetCDF",
+                                    "enabled":True,
+                                    "_default":False,
+                                    "workspace":{"name": basin},
+                                    "configure":"all",
+                                    "url":"file:basins/{}/{}".format(basin,
+                                    bname)}}
+        if description != None:
+            payload['coverageStore']["description"] = description
+
+        create_cs = ask_user("You are about to create a new geoserver"
+                             " coverage store called: {} in the {}\n Are "
+                             " you sure you want to continue?"
+                             "".format(store, basin), bypass=self.bypass)
+        if not create_cs:
+            self.log.info("Aborting creating a new coverage store."
+                          "Exiting...")
+            sys.exit()
+        else:
+            self.log.info("Creating a new coverage on geoserver...")
+            self.log.debug(pformat(payload))
+            rjson = self.make(resource, payload)
 
     def create_layer(self, basin, store, layer):
         """
@@ -623,7 +655,7 @@ class AWSM_Geoserver(object):
                "".format(colormap)),'-s']
 
         self.log.debug("Executing hack:\n{}".format(" ".join(cmd)))
-        s = check_output(" ".join(cmd), shell=True, universal_newlines=True)
+        s = sp.check_output(" ".join(cmd), shell=True, universal_newlines=True)
         self.log.debug(s)
         rjson = self.get(resource)
 
@@ -664,6 +696,7 @@ class AWSM_Geoserver(object):
             upload_type: Determines how the data is uploaded
             mask: Filename of a netcdf containing a mask layer
         """
+
         self.log.info("Associated Basin: {}".format(basin))
         self.log.info("Data Upload Type: {}".format(upload_type))
         self.log.info("Source Filename: {}".format(filename))
@@ -852,7 +885,7 @@ def ask_user(msg, bypass=False):
             acceptable = True
             response = False
         else:
-            self.log.info("Unrecognized answer, please use (y, yes, n, no)")
+            print("Unrecognized answer, please use (y, yes, n, no)")
 
     return response
 
