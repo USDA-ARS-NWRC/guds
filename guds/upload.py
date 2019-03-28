@@ -158,6 +158,33 @@ class AWSM_Geoserver(object):
 
         return r.raise_for_status()
 
+    def move(self, resource, fname):
+        """
+        Wrapper for the put function in the request library, this is written
+        to move files from loca to the geoserver
+        """
+        headers = {'accept':'application/vnd.ogc.sld+xml','content-type': 'application/vnd.ogc.sld+xml'}
+
+        request_url = urljoin(self.url, resource)
+
+        self.log.debug("PUT request to {}".format(request_url))
+
+        with open(fname,'r') as fp:
+
+            r = requests.put(
+                request_url,
+                headers=headers,
+                data=fp,
+                auth=self.credential
+            )
+            fp.close()
+
+        self.handle_status(resource,r.status_code)
+
+        self.log.debug("Response from PUT: {}".format(r))
+
+        return r.raise_for_status()
+
     def modify(self, resource, payload):
         """
         Wrapper for Put request.
@@ -169,7 +196,6 @@ class AWSM_Geoserver(object):
         Returns:
             string: request status
         """
-
         headers = {'accept':'application/json',
                    'content-type':'application/json'}
 
@@ -873,6 +899,41 @@ class AWSM_Geoserver(object):
 
         self.grab(resource, fname)
 
+    def submit_styles(self, local_files):
+        """
+        Uses a post to make the styles available, then uses a put to actually
+        move the styles there.
+        """
+        resource = "styles/"
+        existing_styles = self.get(resource)
+        existing_styles = [style['name'] for style in existing_styles['styles']['style']]
+
+        for f in local_files:
+            skip = False
+
+            style_name = os.path.basename(f).split('.')[0]
+            style_resource = "styles/{}".format(style_name)
+
+            # Check if this is already exists.
+            if style_name in existing_styles:
+                ans = ask_user("You are about to overwrite the style {}."
+                         "\nDo you want to continue?".format(style_name),
+                         bypass=self.bypass)
+                if ans:
+                    self.delete(style_resource)
+                else:
+                    self.lof.warn("Skipping overwriting {}!".format(style_name))
+                    skip = True
+
+            # Upload that bad boy
+            if not skip:
+                self.log.info("Adding the style {}  to the geoserver...".format(style_name))
+                payload = {"style":{"name":style_name, "filename":f}}
+                resource = "styles/"
+
+                self.make(resource, payload)
+
+                self.move(style_resource, f)
 
 def ask_user(msg, bypass=False):
     """
@@ -934,14 +995,14 @@ def main():
                                             " AWSM/SMRF topo image, or AWSM "
                                             " modeling results to a geoserver")
 
-    p.add_argument('-f','--filename', dest='filename',
-                    help="Path to a file containing either a lidar flight,"
-                    "AWSM/SMRF topo image, or AWSM modeling results or"
-                    " shapefiles")
+    p.add_argument('-f','--files', dest='filenames', nargs='+',
+                    help="Path(s) to a file containing either a lidar flight,"
+                    "AWSM/SMRF topo image, AWSM modeling snow.nc, shapefiles"
+                    " or a list of styles")
 
     p.add_argument('-b','--basin', dest='basin',
                     choices=['brb', 'kaweah', 'kings', 'lakes', 'merced',
-                             'sanjoaquin','tuolumne'],
+                             'sanjoaquin','tuolumne'], required=False,
                     help="Basin name to submit to which is also the geoserver"
                          " workspace name")
 
@@ -952,7 +1013,7 @@ def main():
 
     p.add_argument('-t','--data_type', dest='data_type',
                     default='modeled',
-                    choices=['flight','topo','shapefile','modeled'],
+                    choices=['flight','topo','shapefile','modeled','styles'],
                     required=False,
                     help="Upload/download type dictates how some items are uploaded/downloaded.")
 
@@ -1000,10 +1061,15 @@ def main():
             gs.download(args.basin, args.download, download_type=args.data_type)
 
         else:
-            # Upload a file
-            gs.upload(args.basin, args.filename, upload_type=args.data_type,
-                                             espg=args.espg,
-                                             mask=args.mask)
+            if args.data_type=="styles":
+                if type(args.filenames)!= list:
+                    args.filenames = [args.filenames]
+                gs.submit_styles(args.filenames)
+            else:
+                # Upload a file
+                gs.upload(args.basin, args.filenames, upload_type=args.data_type,
+                                                     espg=args.espg,
+                                                     mask=args.mask)
 
 
 if __name__ =='__main__':
