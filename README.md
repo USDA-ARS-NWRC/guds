@@ -1,4 +1,4 @@
-# GUDS - Geoserver Upload Download Script v0.2.2
+# GUDS - Geoserver Upload Download Script v0.3.0
 [![PyPI version](https://badge.fury.io/py/guds.svg)](https://badge.fury.io/py/guds)
 
 The GUDS repo contains a script for moving around the modeling data between its
@@ -27,7 +27,13 @@ To do install it from source:
 
 ## Usage
 
+General usage looks like:
+
 `guds -f <filename> -t <upload data type>  -b <basin name> -m <mask netcdf>`
+
+Uploading styles is done by:
+
+`guds -f <filenames> -t styles`
 
 ### Upload Type
 GUDS is designed to handle 3 different types of data.
@@ -42,6 +48,13 @@ any images in the file will be uploaded.
 
 3. Flights - Eventually  Lidar snow depth images will be uploadable, in the
 mean time it is under development.
+
+4. Styles - Upload SLD type styles to the geoserver, currently only applies to rasters
+
+### Download Type
+
+1. Modeled Output - Original netcdf of the modeled data can be downloaded
+
 
 ### Specifying the basin
 To upload data, GUDS must receive a basin flag to know how to organize it.
