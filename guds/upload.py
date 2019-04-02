@@ -125,7 +125,7 @@ class AWSM_Geoserver(object):
 
         self.handle_status(resource,r.status_code)
 
-        self.log.debug("POST request returns {}:".format(result))
+        self.log.debug("POST/MAKE request returns {}:".format(result))
         return result
 
     def delete(self, resource, **kwargs):
@@ -142,7 +142,7 @@ class AWSM_Geoserver(object):
 
         headers = {'content-type':'application/json'}
         request_url = urljoin(self.url, resource)
-        self.log.debug("PUT request to {}".format(request_url))
+        self.log.debug("DELETE request to {}".format(request_url))
 
         r = requests.delete(
             request_url,
@@ -158,7 +158,7 @@ class AWSM_Geoserver(object):
 
         return r.raise_for_status()
 
-    def move(self, resource, fname):
+    def move_style(self, resource, fname):
         """
         Wrapper for the put function in the request library, this is written
         to move files from loca to the geoserver
@@ -167,7 +167,7 @@ class AWSM_Geoserver(object):
 
         request_url = urljoin(self.url, resource)
 
-        self.log.debug("PUT request to {}".format(request_url))
+        self.log.debug("PUT/MOVE request to {}".format(request_url))
 
         with open(fname,'r') as fp:
 
@@ -178,37 +178,6 @@ class AWSM_Geoserver(object):
                 auth=self.credential
             )
             fp.close()
-
-        self.handle_status(resource,r.status_code)
-
-        self.log.debug("Response from PUT: {}".format(r))
-
-        return r.raise_for_status()
-
-    def modify(self, resource, payload):
-        """
-        Wrapper for Put request.
-
-        Args:
-            resource: Relative location from the http root
-            payload: Dictionary containing data to transfer.
-
-        Returns:
-            string: request status
-        """
-        headers = {'accept':'application/json',
-                   'content-type':'application/json'}
-
-        request_url = urljoin(self.url, resource)
-
-        self.log.debug("PUT request to {}".format(request_url))
-
-        r = requests.put(
-            request_url,
-            headers=headers,
-            json=payload,
-            auth=self.credential
-        )
 
         self.handle_status(resource,r.status_code)
 
@@ -233,7 +202,6 @@ class AWSM_Geoserver(object):
             self.log.debug(msg + " was redirected.")
         else:
             self.log.debug("Status Code Recieved: {}".format(code))
-
 
     def get(self, resource, headers = {'Accept':'application/json'}):
         """
@@ -294,7 +262,31 @@ class AWSM_Geoserver(object):
                  if chunk:
                      fp.write(chunk)
 
-        self.log.info("File Dowload complete. Written to {}".format(fname))
+        self.log.info("File Downloaded to {}".format(fname))
+
+    def get_basins(self):
+        """
+        basin workspace
+        """
+        rjson = self.get("workspaces/")
+        basins = []
+
+        for b in rjson["workspaces"]["workspace"]:
+            basins.append(b["name"])
+
+        return basins
+
+    def get_layers(self, basin):
+        """
+        Returns a list of names currently on the geoserver for a given basin
+
+        """
+        layers = []
+        rjson = self.get("workspaces/{}/layers".format(basin))
+
+        for lyr in rjson["layers"]["layer"]:
+            layers.append(lyr["name"])
+        return layers
 
     def extract_data(self, fname, upload_type='modeled', espg=None, mask=None):
         """
@@ -799,9 +791,6 @@ class AWSM_Geoserver(object):
 
             self.create_basin(basin)
 
-        # Timing
-        self.start = time.time()
-
         # Reduce the size of netcdfs if possible return the new filename
         filename = self.extract_data(filename, upload_type=upload_type,
                                                espg=espg,
@@ -842,10 +831,6 @@ class AWSM_Geoserver(object):
         if self.cleanup:
             self.log.info("Cleaning up files... Removing {}".format(self.tmp))
             rmtree(self.tmp)
-
-        # Timing
-        self.log.info("Upload took: {0:0.1f}s".format(time.time() - self.start))
-        self.log.info("Complete!\n")
 
     def submit_topo(self, filename, basin, layers=None):
         """
@@ -929,7 +914,9 @@ class AWSM_Geoserver(object):
     def submit_styles(self, local_files):
         """
         Uses a post to make the styles available, then uses a put to actually
-        move the styles there.
+        move the styles information there. Then go through and run submit_styles
+        over all of the available layers
+
         """
         resource = "styles/"
         existing_styles = self.get(resource)
@@ -937,6 +924,7 @@ class AWSM_Geoserver(object):
         self.log.info("Uploading {} styles.".format(len(local_files)))
         self.log.info("{} styles already exist.".format(len(existing_styles)))
 
+        # Loop through all the SLD files to upload
         for f in local_files:
             skip = False
 
@@ -948,8 +936,11 @@ class AWSM_Geoserver(object):
                 ans = ask_user("You are about to overwrite the style {}."
                          "\nDo you want to continue?".format(style_name),
                          bypass=self.bypass)
+                # Overwrite
                 if ans:
-                    self.delete(style_resource)
+                    self.delete(style_resource, purge=True, recurse=True)
+
+                # Skip it
                 else:
                     self.lof.warn("Skipping overwriting {}!".format(style_name))
                     skip = True
@@ -960,9 +951,21 @@ class AWSM_Geoserver(object):
                 payload = {"style":{"name":style_name, "filename":f}}
                 resource = "styles/"
 
+                # Create the placeholder
                 self.make(resource, payload)
 
-                self.move(style_resource, f)
+                # Move the SLD content up
+                self.move_style(style_resource, f)
+
+        # Go back and update all the layers styles
+        basins = self.get_basins()
+        for b in basins:
+            layers = self.get_layers(b)
+            self.log.info("Assigning styles to {} layers on the {}"
+                          "".format(len(layers), b))
+
+            for lyr in layers:
+                self.assign_colormaps(b, lyr)
 
 def ask_user(msg, bypass=False):
     """
@@ -1075,6 +1078,9 @@ def main():
 
     args = p.parse_args()
 
+    # Timing
+    start = time.time()
+
     # User requested a geoserver.json file to fill out.
     if args.write_json:
         write_json(args.bypass)
@@ -1090,17 +1096,22 @@ def main():
             gs.download(args.basin, args.download, download_type=args.data_type)
 
         else:
+            # Submitting styles only
             if args.data_type=="styles":
+
                 if type(args.filenames)!= list:
                     args.filenames = [args.filenames]
-                gs.submit_styles(args.filenames)
-            else:
 
+                gs.submit_styles(args.filenames)
+
+            else:
                 # Upload a file
                 gs.upload(args.basin, args.filenames[0], upload_type=args.data_type,
                                                      espg=args.espg,
                                                      mask=args.mask)
-
+        # Timing
+        end = time.time()
+        gs.log.info("Completed in {0:0.1f}s".format(end-start))
 
 if __name__ =='__main__':
     main()
