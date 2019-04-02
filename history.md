@@ -11,4 +11,9 @@
 
 * Added modeled data downloads
 
+### 0.3.0
+
+* Uploads batches of styles
+* Styles attempt to auto detect/assign to layers upon generation
+* Overwriting of existing layers
 
