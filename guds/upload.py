@@ -273,15 +273,36 @@ class AWSM_Geoserver(object):
 
     def get_basins(self):
         """
-        basin workspace
+        Retrieves all the workspaces/ basins and returns a list of names
         """
         rjson = self.get("workspaces/")
         basins = []
 
-        for b in rjson["workspaces"]["workspace"]:
-            basins.append(b["name"])
+        if rjson["workspaces"]:
+            for b in rjson["workspaces"]["workspace"]:
+                basins.append(b["name"])
+        else:
+            self.log.warn("No basins found!")
 
         return basins
+
+    def get_coverage_stores(self, basin):
+        """
+        Returns a list of names currently on the geoserver for a given basin
+
+        """
+        coverageStores = []
+        rjson = self.get("workspaces/{}/coverageStores".format(basin))
+
+        # If there is a list
+        if rjson["coverageStores"]:
+            for cs in rjson["coverageStores"]["coverageStore"]:
+                coverageStores.append(cs["name"])
+        else:
+            self.log.warn("No coverageStores found for the {}".format(basin))
+
+        return coverageStores
+
 
     def get_layers(self, basin):
         """
@@ -291,8 +312,13 @@ class AWSM_Geoserver(object):
         layers = []
         rjson = self.get("workspaces/{}/layers".format(basin))
 
-        for lyr in rjson["layers"]["layer"]:
-            layers.append(lyr["name"])
+        # If there is a list
+        if rjson["layers"]:
+            for lyr in rjson["layers"]["layer"]:
+                layers.append(lyr["name"])
+        else:
+            self.log.warn("No layers found for the {}".format(basin))
+
         return layers
 
     def extract_data(self, fname, upload_type='modeled', espg=None, mask=None):
@@ -599,6 +625,45 @@ class AWSM_Geoserver(object):
             self.log.info("Creating a new coverage on geoserver...")
             self.log.debug(pformat(payload))
             rjson = self.make(resource, payload)
+
+    def create_latest_layers(basin):
+        """
+        Creates a 3 new layers call latest_<variable>
+        for a given basin. Calculates all the layers dates and finds the most
+        recent one.
+
+        """
+        self.log.info("Assigning latest variables to layers named latest")
+        coverages = self.get_coverage_stores(basin)
+
+        dates = []
+        # Get all the coverage names/ check dates
+        for cs in coverages:
+            var_nm_date = lyr.split(':')[-1].lower()
+            sdate = "".join([s for s in var_nm_date if s.is_numeric()])
+
+            dates.append(pd.to_datetime(var_nm_date))
+
+        # Most recent modeling date
+        latest_date = max(dates)
+        latest_str = "".join(latest_date.isoformat().split('T')[0].split("-"))
+
+        self.log.info("Using {} for the latest model date..."
+                      "".format(latest.isoformat().split('T')[0]))
+
+        # Grab all the layers with the most recent date in their name
+        latest_layers = [lyr for lyr in layers if latest_str in lyr]
+
+        # Grab layer info, assign it to a new layer called lates
+        for lyr in latest_layers:
+
+            # Grab the latest layer infor for a date
+
+            lyr_info = self.get("layers/layer/{}.json".format(lyr))
+            lyr_info['layer']['name']
+            sdate = "".join([s for s in var_nm_date if s.is_numeric()])
+
+        pass
 
     def create_layer(self, basin, store, layer):
         """
@@ -921,11 +986,16 @@ class AWSM_Geoserver(object):
 
         self.grab(resource, fname)
 
-    def submit_styles(self, local_files):
+    def submit_styles(self, local_files, basin=None):
         """
         Uses a post to make the styles available, then uses a put to actually
         move the styles information there. Then go through and run submit_styles
         over all of the available layers
+
+        Args:
+            local_files: List of styles to upload. Must be SLD.
+            basin: Specify a basin who's layers will receive the new styles,
+                 default is none which will apply them to all
 
         """
         resource = "styles/"
@@ -968,7 +1038,11 @@ class AWSM_Geoserver(object):
                 self.move_style(style_resource, f)
 
         # Go back and update all the layers styles
-        basins = self.get_basins()
+        if basin != None:
+            basins = [basin]
+        else:
+            basins = self.get_basins()
+
         for b in basins:
             layers = self.get_layers(b)
             self.log.info("Assigning styles to {} layers on the {}"
