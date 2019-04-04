@@ -688,7 +688,9 @@ class AWSM_Geoserver(object):
                                            "coverages/{}").format(basin,
                                                                  cs,
                                                                  name)
-                        existing_latest = self.get("workspaces/{}/coveragestores/{}/coverages/{}".format(basin, cs, name))
+                        resource = ("workspaces/{}/coveragestores/{}/coverages/{}"
+                                    "".format(basin, cs, name))                                         
+                        existing_latest = self.get(resource)
 
                         self.delete(existing_latest['coverage']['href'])
 
