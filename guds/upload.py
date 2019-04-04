@@ -286,29 +286,27 @@ class AWSM_Geoserver(object):
 
         return basins
 
-    def get_coverage_stores(self, basin):
+    def get_coverages(self, basin):
         """
         Returns a list of names currently on the geoserver for a given basin
-
         """
         coverageStores = []
-        rjson = self.get("workspaces/{}/coverageStores".format(basin))
+        rjson = self.get("workspaces/{}/coveragestores".format(basin))
 
         # If there is a list
         if rjson["coverageStores"]:
             for cs in rjson["coverageStores"]["coverageStore"]:
                 coverageStores.append(cs["name"])
         else:
-            self.log.warn("No coverageStores found for the {}".format(basin))
+            self.log.warn("No coverages found for the {}".format(basin))
 
         return coverageStores
-
 
     def get_layers(self, basin):
         """
         Returns a list of names currently on the geoserver for a given basin
-
         """
+
         layers = []
         rjson = self.get("workspaces/{}/layers".format(basin))
 
@@ -626,44 +624,55 @@ class AWSM_Geoserver(object):
             self.log.debug(pformat(payload))
             rjson = self.make(resource, payload)
 
-    def create_latest_layers(basin):
+    def create_latest_layers(self, basin):
         """
         Creates a 3 new layers call latest_<variable>
         for a given basin. Calculates all the layers dates and finds the most
         recent one.
 
         """
-        self.log.info("Assigning latest variables to layers named latest")
-        coverages = self.get_coverage_stores(basin)
+
+        self.log.info("Determining latest variables...")
+        coverages = self.get_coverages(basin)
 
         dates = []
+
         # Get all the coverage names/ check dates
         for cs in coverages:
-            var_nm_date = lyr.split(':')[-1].lower()
-            sdate = "".join([s for s in var_nm_date if s.is_numeric()])
+            var_nm_date = cs.split(':')[-1].lower()
+            sdate = "".join([s for s in var_nm_date if s.isnumeric()])
 
-            dates.append(pd.to_datetime(var_nm_date))
+            dates.append(pd.to_datetime(sdate))
 
         # Most recent modeling date
         latest_date = max(dates)
         latest_str = "".join(latest_date.isoformat().split('T')[0].split("-"))
 
-        self.log.info("Using {} for the latest model date..."
-                      "".format(latest.isoformat().split('T')[0]))
 
-        # Grab all the layers with the most recent date in their name
-        latest_layers = [lyr for lyr in layers if latest_str in lyr]
+        self.log.info("Using {} for the latest model date..."
+                      "".format(latest_date.isoformat().split('T')[0]))
+
+        # Grab all the coverages with the most recent date in their name
+        latest_coverages = [cs for cs in coverages if latest_str in cs]
 
         # Grab layer info, assign it to a new layer called lates
-        for lyr in latest_layers:
+        for cs in latest_coverages:
+            # Grab the latest layer info for a date
+            cs_info = self.get("workspaces/{}/coveragestores/{}".format(basin, cs))
+            sdate = "".join([s for s in var_nm_date if s.isnumeric()])
 
-            # Grab the latest layer infor for a date
+            # Get layers associated to store
+            resource = ("workspaces/{}/coveragestores/{}/coverages.json"
+                        "".format(basin, cs))
+            rasters = self.get(resource)
 
-            lyr_info = self.get("layers/layer/{}.json".format(lyr))
-            lyr_info['layer']['name']
-            sdate = "".join([s for s in var_nm_date if s.is_numeric()])
-
-        pass
+            if rasters['coverages']:
+                for ras in rasters['coverages']['coverage']:
+                    ras_info = self.get(ras['href'])
+                    name = ras_info['coverage']["name"]
+                    name = "".join([s for s in name if not s.isnumeric()])
+                    ras_info['coverage']["name"] = "latest_{}".format(name)
+                    self.make(resource,ras_info)
 
     def create_layer(self, basin, store, layer):
         """
@@ -803,7 +812,7 @@ class AWSM_Geoserver(object):
 
         self.log.info("{}/{} availables styles are matching".format(len(result), len(avail)))
 
-        # Add in dyanamic_default default if it is there
+        # Add in dynamic_default default if it is there
         if "dynamic_default" in avail:
             result.append('dynamic_default')
 
@@ -834,7 +843,8 @@ class AWSM_Geoserver(object):
                 self.create_layer(basin, store, name)
 
     def upload(self, basin, filename, upload_type='modeled', espg=None,
-                                                             mask=None):
+                                                             mask=None,
+                                                             make_latest=False):
         """
         Generic upload function to redirect to specific uploading of special
         data types, under development, currently only topo images work. Requires
@@ -845,6 +855,7 @@ class AWSM_Geoserver(object):
             filename: path of a local to the script file to upload
             upload_type: Determines how the data is uploaded
             mask: Filename of a netcdf containing a mask layer
+            make_latest: boolean indicating whether to update the latest layer
         """
 
         self.log.info("Associated Basin: {}".format(basin))
@@ -892,6 +903,8 @@ class AWSM_Geoserver(object):
 
         elif upload_type == 'modeled':
             self.submit_modeled(remote_fname, basin, layers=layers)
+            if make_latest:
+                self.create_latest_layers(basin)
 
         elif upload_type == 'flight':
             self.log.error("Uploading flights is undeveloped")
@@ -1134,7 +1147,8 @@ def main():
                     default='modeled',
                     choices=['flight','topo','shapefile','modeled','styles'],
                     required=False,
-                    help="Upload/download type dictates how some items are uploaded/downloaded.")
+                    help="Data type dictates how some items are "
+                         "uploaded/downloaded.")
 
     p.add_argument('-e','--espg', dest='espg',
                     type=int, default=None,
@@ -1162,9 +1176,16 @@ def main():
 
     p.add_argument('-do','--download', dest='download',
                     help="Receives a date for downloading files")
+
     p.add_argument('-nscp','--no_scp', dest='no_scp', action='store_true',
                     help="When used, it doesn't upload the files to the remote."
                     " Not to be used for other than debugging.")
+
+    p.add_argument('-l','--latest', dest='latest', action="store_true",
+                    help="If used guds will also create a latest layer if "
+                         "after uploading by looking at all the layers "
+                         "available for the associated basin")
+
     args = p.parse_args()
 
     # Timing
@@ -1186,19 +1207,24 @@ def main():
             gs.download(args.basin, args.download, download_type=args.data_type)
 
         else:
-            # Submitting styles only
-            if args.data_type=="styles":
+            if args.filenames != None:
+                # Submitting styles only
+                if args.data_type=="styles":
 
-                if type(args.filenames)!= list:
-                    args.filenames = [args.filenames]
+                    if type(args.filenames)!= list:
+                        args.filenames = [args.filenames]
 
-                gs.submit_styles(args.filenames)
+                    gs.submit_styles(args.filenames)
 
-            else:
-                # Upload a file
-                gs.upload(args.basin, args.filenames[0], upload_type=args.data_type,
-                                                     espg=args.espg,
-                                                     mask=args.mask)
+                else:
+                    # Upload a file
+                    gs.upload(args.basin, args.filenames[0], upload_type=args.data_type,
+                                                         espg=args.espg,
+                                                         mask=args.mask)
+
+        if args.data_type=='modeled' and args.latest:
+            gs.create_latest_layers(args.basin)
+
         # Timing
         end = time.time()
         gs.log.info("Completed in {0:0.1f}s".format(end-start))
