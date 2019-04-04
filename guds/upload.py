@@ -628,11 +628,11 @@ class AWSM_Geoserver(object):
         """
         Creates a 3 new layers call latest_<variable>
         for a given basin. Calculates all the layers dates and finds the most
-        recent one.
+        recent one and makes a copy of it associated to lates_<variable>
 
         """
 
-        self.log.info("Determining latest variables...")
+        self.log.info("Determining the date for latest variables...")
         coverages = self.get_coverages(basin)
 
         dates = []
@@ -653,12 +653,15 @@ class AWSM_Geoserver(object):
                       "".format(latest_date.isoformat().split('T')[0]))
 
         # Grab all the coverages with the most recent date in their name
+        # Note: latest doesn't create a new coverages store just a new coverage
+        # pointing to an existing store.
         latest_coverages = [cs for cs in coverages if latest_str in cs]
 
         # Grab layer info, assign it to a new layer called lates
         for cs in latest_coverages:
             # Grab the latest layer info for a date
-            cs_info = self.get("workspaces/{}/coveragestores/{}".format(basin, cs))
+            cs_info = self.get("workspaces/{}/coveragestores/{}".format(basin,
+                                                                        cs))
             sdate = "".join([s for s in var_nm_date if s.isnumeric()])
 
             # Get layers associated to store
@@ -666,13 +669,33 @@ class AWSM_Geoserver(object):
                         "".format(basin, cs))
             rasters = self.get(resource)
 
+            # If there are coverages associated to the latest store
             if rasters['coverages']:
+
                 for ras in rasters['coverages']['coverage']:
                     ras_info = self.get(ras['href'])
                     name = ras_info['coverage']["name"]
                     name = "".join([s for s in name if not s.isnumeric()])
-                    ras_info['coverage']["name"] = "latest_{}".format(name)
-                    self.make(resource,ras_info)
+                    name = "latest_{}".format(name)
+
+                    ras_info['coverage']["name"] = name
+
+                    # Check to see if it exists and attempt to overwrite it
+                    if self.exists(basin, cs, name):
+                        self.log.warn("Overwriting {} {}".format(basin, name))
+                        latest_resource = ("workspaces/{}/"
+                                           "coveragestores/{}/"
+                                           "coverages/{}").format(basin,
+                                                                 cs,
+                                                                 name)
+                        existing_latest = self.get("workspaces/{}/coveragestores/{}/coverages/{}".format(basin, cs, name))
+
+                        self.delete(existing_latest['coverage']['href'])
+
+                    self.make(resource, ras_info)
+
+                    # Assign Colormaps
+                    self.assign_colormaps(basin, name)
 
     def create_layer(self, basin, store, layer):
         """
@@ -756,7 +779,8 @@ class AWSM_Geoserver(object):
             colormap = "dynamic_default"
         else:
             colormap = "raster"
-        self.log.info("Assigning {} as default colormap.".format(colormap))
+
+        self.log.info("Assigning {} as default colormap to {}.".format(colormap, name))
 
         # ##################### Correct way but doesn't work ####################
         #
@@ -810,7 +834,8 @@ class AWSM_Geoserver(object):
                 if key in style.lower() and key in layer_name.lower():
                     result.append(style)
 
-        self.log.info("{}/{} availables styles are matching".format(len(result), len(avail)))
+        self.log.info("{}/{} availables styles are matching".format(len(result),
+                                                                    len(avail)))
 
         # Add in dynamic_default default if it is there
         if "dynamic_default" in avail:
@@ -843,8 +868,7 @@ class AWSM_Geoserver(object):
                 self.create_layer(basin, store, name)
 
     def upload(self, basin, filename, upload_type='modeled', espg=None,
-                                                             mask=None,
-                                                             make_latest=False):
+                                                             mask=None):
         """
         Generic upload function to redirect to specific uploading of special
         data types, under development, currently only topo images work. Requires
@@ -855,7 +879,6 @@ class AWSM_Geoserver(object):
             filename: path of a local to the script file to upload
             upload_type: Determines how the data is uploaded
             mask: Filename of a netcdf containing a mask layer
-            make_latest: boolean indicating whether to update the latest layer
         """
 
         self.log.info("Associated Basin: {}".format(basin))
@@ -874,7 +897,6 @@ class AWSM_Geoserver(object):
 
         # Ensure that this workspace exists
         if not self.exists(basin):
-
             self.create_basin(basin)
 
         # Reduce the size of netcdfs if possible return the new filename
@@ -903,8 +925,6 @@ class AWSM_Geoserver(object):
 
         elif upload_type == 'modeled':
             self.submit_modeled(remote_fname, basin, layers=layers)
-            if make_latest:
-                self.create_latest_layers(basin)
 
         elif upload_type == 'flight':
             self.log.error("Uploading flights is undeveloped")
@@ -993,7 +1013,8 @@ class AWSM_Geoserver(object):
             self.log.error("{} data downloads have not been develop yet!")
             sys.exit()
 
-        self.log.info("Download Requested. Attempting to download {} from the {}.".format(fname, basin))
+        self.log.info("Download Requested. Attempting to download {} from the "
+                      "{}.".format(fname, basin))
 
         resource = "resource/basins/{}/{}".format(basin,fname)
 
@@ -1013,7 +1034,8 @@ class AWSM_Geoserver(object):
         """
         resource = "styles/"
         existing_styles = self.get(resource)
-        existing_styles = [style['name'] for style in existing_styles['styles']['style']]
+        existing_styles = [style['name'] for style in \
+                                             existing_styles['styles']['style']]
         self.log.info("Uploading {} styles.".format(len(local_files)))
         self.log.info("{} styles already exist.".format(len(existing_styles)))
 
