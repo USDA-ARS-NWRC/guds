@@ -17,3 +17,7 @@
 * Styles attempt to auto detect/assign to layers upon generation
 * Overwriting of existing layers
 
+### 0.4.0
+
+* Writes a new layer for each modeled variable called latest
+
