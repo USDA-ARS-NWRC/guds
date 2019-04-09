@@ -21,7 +21,8 @@ from pprint import pformat
 
 
 class AWSM_Geoserver(object):
-    def __init__(self, fname, log=None, debug=False, bypass=False, cleanup=True):
+    def __init__(self, fname, log=None, debug=False, bypass=False, cleanup=True,
+                                                                  no_scp=False):
 
         # Setup external logging if need be
         if log==None:
@@ -50,6 +51,7 @@ class AWSM_Geoserver(object):
             cred = json.load(fp)
             fp.close()
 
+        # Geoserver credentials
         self.geoserver_password = cred['geoserver_password']
         self.geoserver_username = cred['geoserver_username']
 
@@ -59,9 +61,14 @@ class AWSM_Geoserver(object):
             self.url +='/'
         self.url = urljoin(self.url,'rest/')
 
+        # User name on the server hosting the geoserver
         self.username = cred['remote_username']
+
+        # Bypass set to true will answer yes to all yes/no questions
         self.bypass = bypass
 
+        # No scp will avoid copying data. To be used for debugging only
+        self.no_scp = no_scp
         # Extract the base url
         self.base_url = urlparse(self.url).netloc
 
@@ -413,8 +420,11 @@ class AWSM_Geoserver(object):
         self.log.debug(" ".join(cmd))
 
         try:
-            pass
-            #s = sp.check_output(cmd, shell=False, universal_newlines=True)
+            if self.no_scp:
+                self.log.warn("User requested to NOT copy the data to its"
+                              " final location...")
+            else:
+                s = sp.check_output(cmd, shell=False, universal_newlines=True)
 
         except Exception as e:
             self.log.error(e.output)
@@ -967,6 +977,7 @@ class AWSM_Geoserver(object):
             for lyr in layers:
                 self.assign_colormaps(b, lyr)
 
+
 def ask_user(msg, bypass=False):
     """
     Asks the user yes no questions
@@ -979,6 +990,8 @@ def ask_user(msg, bypass=False):
     """
 
     acceptable = False
+
+    # Wait for a recognizeable answer
     while not acceptable:
         if bypass:
             ans='yes'
@@ -1075,7 +1088,9 @@ def main():
 
     p.add_argument('-do','--download', dest='download',
                     help="Receives a date for downloading files")
-
+    p.add_argument('-nscp','--no_scp', dest='no_scp', action='store_true',
+                    help="When used, it doesn't upload the files to the remote."
+                    " Not to be used for other than debugging.")
     args = p.parse_args()
 
     # Timing
@@ -1089,7 +1104,8 @@ def main():
         # Get an instance to interact with the geoserver.
         gs = AWSM_Geoserver(args.credentials, debug=args.debug,
                                               bypass=args.bypass,
-                                              cleanup=args.cleanup)
+                                              cleanup=args.cleanup,
+                                              no_scp=args.no_scp)
 
         if args.download != None:
             # Download a file
