@@ -634,17 +634,16 @@ class AWSM_Geoserver(object):
 
         self.log.info("Determining the date for latest variables...")
         coverages = self.get_coverages(basin)
-
         dates = []
 
-        # Get all the coverage names/ check dates
+        # Get all the coverage names/ check dates avoiding latest
         for cs in coverages:
             var_nm_date = cs.split(':')[-1].lower()
-            sdate = "".join([s for s in var_nm_date if s.isnumeric()])
+            if "latest" not in var_nm_date:
+                sdate = "".join([s for s in var_nm_date if s.isnumeric()])
+                dates.append(pd.to_datetime(sdate))
 
-            dates.append(pd.to_datetime(sdate))
-
-        # Most recent modeling date
+        # Find the most recent modeling date
         latest_date = max(dates)
         latest_str = "".join(latest_date.isoformat().split('T')[0].split("-"))
 
@@ -653,52 +652,108 @@ class AWSM_Geoserver(object):
                       "".format(latest_date.isoformat().split('T')[0]))
 
         # Grab all the coverages with the most recent date in their name
-        # Note: latest doesn't create a new coverages store just a new coverage
-        # pointing to an existing store.
         latest_coverages = [cs for cs in coverages if latest_str in cs]
 
-        # Grab layer info, assign it to a new layer called lates
-        for cs in latest_coverages:
-            # Grab the latest layer info for a date
-            cs_info = self.get("workspaces/{}/coveragestores/{}".format(basin,
-                                                                        cs))
-            sdate = "".join([s for s in var_nm_date if s.isnumeric()])
+        # Get the coverage stor info
+        resource = "workspaces/{}/coveragestores/{}".format(basin,
+                                                            latest_coverages[0])
+        cs_info = self.get(resource)
 
-            # Get layers associated to store
-            resource = ("workspaces/{}/coveragestores/{}/coverages.json"
-                        "".format(basin, cs))
-            rasters = self.get(resource)
+        # Modify the info's name
+        name_o = cs_info['coverageStore']["name"]
+        name = self.get_latest_name(name_o)
 
-            # If there are coverages associated to the latest store
-            if rasters['coverages']:
+        # Remove any trailing underscores
+        if name[-1] == "_":
+            name = name[0:-1]
 
-                for ras in rasters['coverages']['coverage']:
-                    ras_info = self.get(ras['href'])
-                    name = ras_info['coverage']["name"]
-                    name = "".join([s for s in name if not s.isnumeric()])
-                    name = "latest_{}".format(name)
+        cs_info["coverageStore"]["name"] = name
 
-                    ras_info['coverage']["name"] = name
+        # Check to see if the store already exists
+        if self.exists(basin, name):
+            resource = "workspaces/{}/coveragestores/{}".format(basin, name)
+            self.delete(resource,  purge=True, recurse=True)
 
-                    # Check to see if it exists and attempt to overwrite it
-                    if self.exists(basin, cs, name):
-                        self.log.warn("Overwriting {} {}".format(basin, name))
-                        latest_resource = ("workspaces/{}/"
-                                           "coveragestores/{}/"
-                                           "coverages/{}").format(basin,
-                                                                 cs,
-                                                                 name)
-                        resource = ("workspaces/{}/coveragestores/{}/coverages/{}"
-                                    "".format(basin, cs, name))                                         
-                        existing_latest = self.get(resource)
+        # Create a copy of the store under a new name
+        self.log.info("Creating new store called {} using a store called {}"
+                      "".format(name, name_o))
+        resource = "workspaces/{}/coveragestores/".format(basin)
+        self.make(resource, cs_info)
 
-                        self.delete(existing_latest['coverage']['href'])
+        # Copy existing coverages
+        resource = "workspaces/{}/coveragestores/{}/coverages".format(basin,
+                                                                      name_o)
+        coverages = self.get(resource)
 
-                    self.make(resource, ras_info)
+        # resource to post to
+        resource = "workspaces/{}/coveragestores/{}/coverages".format(basin,
+                                                                      name)
 
-                    # Assign Colormaps
-                    self.assign_colormaps(basin, name)
+        if coverages['coverages']:
+            for c in coverages['coverages']['coverage']:
+                print(c)
+                cov_info = self.get(c['href'])["coverage"]
 
+                cov_name = self.get_latest_name(cov_info['name'])
+                self.log.info("Copying coverage info from {} to {}".format(
+                                                                    cov_info["name"],
+                                                                    cov_name))
+
+                # Modify the original payload
+                cov_info['name'] = cov_name
+                cov_info['store'] = {"name":"{}:{}".format(basin, name)}
+                self.make(resource, {"coverage":cov_info})
+                self.assign_colormaps(basin, cov_name)
+
+        else:
+            self.log.error("No layers associated to store {} to copy for latest"
+                           "".format(name_o))
+
+    #     # Grab layer info, assign it to a new layer called lates
+    #     for cs in latest_coverages:
+    #         # Grab the latest layer info for a date
+    #         cs_info = self.get("workspaces/{}/coveragestores/{}".format(basin,
+    #                                                                     cs))
+    #         sdate = "".join([s for s in var_nm_date if s.isnumeric()])
+    #
+    #         # Get layers associated to store
+    #         resource = ("workspaces/{}/coveragestores/".format(basin))
+    #         coverage_stores = self.get(resource)
+    #
+    #         # If there are coverages associated to the new latest store
+    #         if rasters['coverages']:
+    #
+    #             for ras in rasters['coverages']['coverage']:
+    #                 ras_info = self.get(ras['href'])
+    #                 name = ras_info['coverage']["name"]
+    #                 name = "".join([s for s in name if not s.isnumeric()])
+    #                 name = "latest_{}".format(name)
+    #
+    #                 ras_info['coverage']["name"] = name
+    #
+    #                 # Check to see if it exists and attempt to overwrite it
+    #                 if self.exists(basin, cs, name):
+    #                     self.log.warn("Overwriting {} {}".format(basin, name))
+    #                     latest_resource = ("workspaces/{}/"
+    #                                        "coveragestores/{}/"
+    #                                        "coverages/{}").format(basin,
+    #                                                              cs,
+    #                                                              name)
+    #
+    #                     existing_latest = self.get(latest_resource)
+    #                     self.delete(existing_latest['coverage']['href'])
+    #
+    #                 for k,v in payload.items():
+    #                     if k=='name':
+    #                         payload['coverage'][k] = name
+    #
+    #                     else:
+    #                         payload['coverage'][k] = ras_info[k]
+    #
+    #                 self.make(resource, payload)
+    #
+    #                 # Assign Colormaps
+    #
     def create_layer(self, basin, store, layer):
         """
         Create a raster layer on the geoserver
@@ -716,7 +771,7 @@ class AWSM_Geoserver(object):
         native_name = lyr_name#layer.replace('_',' ')
 
         # Make the names better/ Rename the isnobal stuff
-        if native_name in ['snow_density','specific_mass','thickness']:
+        if native_name in self.remap.keys():
             name = self.remap[native_name]
         else:
             name = lyr_name
@@ -1087,6 +1142,19 @@ class AWSM_Geoserver(object):
 
             for lyr in layers:
                 self.assign_colormaps(b, lyr)
+
+    def get_latest_name(self, name_o):
+        """
+        Takes the original name and removes the date, then adds latest to the
+        name. To be used when assigning copy layers to the latest raster
+        """
+        name = "".join([s for s in name_o if not s.isnumeric()])
+        name = "latest_{}".format(name)
+
+        if name[-1] == "_":
+            name = name[0:-1]
+
+        return name
 
 
 def ask_user(msg, bypass=False):
