@@ -18,7 +18,7 @@ from guds import __version__
 import time
 import pandas as pd
 from pprint import pformat
-
+from zipfile import ZipFile
 
 class AWSM_Geoserver(object):
     def __init__(self, fname, log=None, debug=False, bypass=False, cleanup=True,
@@ -165,12 +165,21 @@ class AWSM_Geoserver(object):
 
         return r.raise_for_status()
 
-    def move_style(self, resource, fname):
+    def move(self, resource, fname, data_type="style"):
         """
         Wrapper for the put function in the request library, this is written
         to move files from loca to the geoserver
         """
-        headers = {'accept':'application/vnd.ogc.sld+xml','content-type': 'application/vnd.ogc.sld+xml'}
+        if data_type =="style":
+            headers = {'accept':'application/vnd.ogc.sld+xml',
+                       'content-type': 'application/vnd.ogc.sld+xml'}
+
+        elif data_type == 'shapefile':
+            headers = {"accept":'application/zip',
+                       "content-type": "application/zip"}
+        else:
+            headers = {"accept":'application/octet-stream',
+                       "content-type": "application/octet-stream"}
 
         request_url = urljoin(self.url, resource)
 
@@ -182,8 +191,8 @@ class AWSM_Geoserver(object):
                 request_url,
                 headers=headers,
                 data=fp,
-                auth=self.credential
-            )
+                auth=self.credential)
+
             fp.close()
 
         self.handle_status(resource,r.status_code)
@@ -709,51 +718,6 @@ class AWSM_Geoserver(object):
             self.log.error("No layers associated to store {} to copy for latest"
                            "".format(name_o))
 
-    #     # Grab layer info, assign it to a new layer called lates
-    #     for cs in latest_coverages:
-    #         # Grab the latest layer info for a date
-    #         cs_info = self.get("workspaces/{}/coveragestores/{}".format(basin,
-    #                                                                     cs))
-    #         sdate = "".join([s for s in var_nm_date if s.isnumeric()])
-    #
-    #         # Get layers associated to store
-    #         resource = ("workspaces/{}/coveragestores/".format(basin))
-    #         coverage_stores = self.get(resource)
-    #
-    #         # If there are coverages associated to the new latest store
-    #         if rasters['coverages']:
-    #
-    #             for ras in rasters['coverages']['coverage']:
-    #                 ras_info = self.get(ras['href'])
-    #                 name = ras_info['coverage']["name"]
-    #                 name = "".join([s for s in name if not s.isnumeric()])
-    #                 name = "latest_{}".format(name)
-    #
-    #                 ras_info['coverage']["name"] = name
-    #
-    #                 # Check to see if it exists and attempt to overwrite it
-    #                 if self.exists(basin, cs, name):
-    #                     self.log.warn("Overwriting {} {}".format(basin, name))
-    #                     latest_resource = ("workspaces/{}/"
-    #                                        "coveragestores/{}/"
-    #                                        "coverages/{}").format(basin,
-    #                                                              cs,
-    #                                                              name)
-    #
-    #                     existing_latest = self.get(latest_resource)
-    #                     self.delete(existing_latest['coverage']['href'])
-    #
-    #                 for k,v in payload.items():
-    #                     if k=='name':
-    #                         payload['coverage'][k] = name
-    #
-    #                     else:
-    #                         payload['coverage'][k] = ras_info[k]
-    #
-    #                 self.make(resource, payload)
-    #
-    #                 # Assign Colormaps
-    #
     def create_layer(self, basin, store, layer):
         """
         Create a raster layer on the geoserver
@@ -956,25 +920,27 @@ class AWSM_Geoserver(object):
         if not self.exists(basin):
             self.create_basin(basin)
 
-        # Reduce the size of netcdfs if possible return the new filename
-        filename = self.extract_data(filename, upload_type=upload_type,
-                                               espg=espg,
-                                               mask=mask)
+        # Handle netcdfs
+        if upload_type in ['topo','modeled']:
+            # Reduce the size of netcdfs if possible return the new filename
+            filename = self.extract_data(filename, upload_type=upload_type,
+                                                   espg=espg,
+                                                   mask=mask)
 
-        # Copy users data up to the remote location
-        remote_fname = self.copy_data(filename, basin, upload_type=upload_type)
+            # Copy users data up to the remote location
+            remote_fname = self.copy_data(filename, basin, upload_type=upload_type)
 
-        # Grab the layer names
-        ds = Dataset(filename)
+            # Grab the layer names
+            ds = Dataset(filename)
 
-        layers = []
-        for name, v in ds.variables.items():
-            if name not in ['time','x','y','projection']:
-                layers.append(name)
+            layers = []
+            for name, v in ds.variables.items():
+                if name not in ['time','x','y','projection']:
+                    layers.append(name)
 
-        if len(layers) == 0:
-            self.log.error("No variables found in netcdf...exiting.")
-            sys.exit()
+            if len(layers) == 0:
+                self.log.error("No variables found in netcdf...exiting.")
+                sys.exit()
 
         # Check for the upload type which determines the filename, and store
         if upload_type == 'topo':
@@ -987,7 +953,7 @@ class AWSM_Geoserver(object):
             self.log.error("Uploading flights is undeveloped")
 
         elif upload_type == 'shapefile':
-            self.log.error("Uploading shapefiles is undeveloped")
+            self.submit_shapefile(filename, basin)
 
         else:
             raise ValueError("Invalid upload type!")
@@ -1053,6 +1019,37 @@ class AWSM_Geoserver(object):
         # Create layers density, specific mass, thickness
         self.create_layers_from_netcdf(basin, store_name, filename,
                                                           layers=layers)
+
+    def submit_shapefile(self, filename, basin, layer=None):
+        """
+        Uploads the shapefiles. If layer=None then it simply uses the filename
+        to create the layer name (replacing underscores with spaces)
+
+        Args:
+            filename: Local path to a .shp file
+            basin: string name of the workspace or basin
+            layer: Alternate layer name to use
+
+        """
+        filename = os.path.abspath(filename)
+        name = os.path.basename(filename).split('.')[0]
+        zipfname = os.path.join(self.tmp, name + '.zip')
+
+        # Get all the files associated with the shapefile
+        associate_files = os.listdir(os.path.dirname(filename))
+        associate_files = [f for f in associate_files if name in f]
+        self.log.info("Zipping shapefile contents, a total of {} files."
+                  "".format(len(associate_files)))
+
+        # Collect and zip files
+        with ZipFile(zipfname,'w') as zip:
+            for f in associate_files:
+                zip.write(f)
+
+        # Create a new datastore
+        resource = "/resource/basins/{}/{}".format(basin, zipfname)
+
+        self.move(resource, zipfname, data_type="shp")
 
     def download(self, basin, date_str, download_type="modeled"):
         """
@@ -1127,7 +1124,7 @@ class AWSM_Geoserver(object):
                 self.make(resource, payload)
 
                 # Move the SLD content up
-                self.move_style(style_resource, f)
+                self.move(style_resource, f)
 
         # Go back and update all the layers styles
         if basin != None:
@@ -1310,9 +1307,10 @@ def main():
 
                 else:
                     # Upload a file
-                    gs.upload(args.basin, args.filenames[0], upload_type=args.data_type,
-                                                         espg=args.espg,
-                                                         mask=args.mask)
+                    gs.upload(args.basin, args.filenames[0],
+                                          upload_type=args.data_type,
+                                          espg=args.espg,
+                                          mask=args.mask)
 
         if args.data_type=='modeled' and args.latest:
             gs.create_latest_layers(args.basin)
