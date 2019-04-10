@@ -90,7 +90,7 @@ class AWSM_Geoserver(object):
 
         # Auto assign layers to colormaps
         self.colormaps_keys = ["depth","density","swe", "dem",
-                            "veg","height","mask"]
+                            "veg","height","mask","basin","subbasin"]
         # temporary directory
         self.tmp = 'tmp'
 
@@ -824,7 +824,7 @@ class AWSM_Geoserver(object):
         # Assign Colormaps
         self.assign_colormaps(basin, name)
 
-    def assign_colormaps(self, basin, name):
+    def assign_colormaps(self, basin, name, layer_type="raster"):
         """
         currently utilizes a hacky version to accomplish our goal. function
         Assigns the colormaps to default and styles available
@@ -832,6 +832,7 @@ class AWSM_Geoserver(object):
         Args:
             basin: name of the basin
             name: name of the layer
+            layer_type: raster or vector to identify how we assign defaults
         """
 
         resource = ("layers/{}:{}".format(basin, name))
@@ -839,7 +840,7 @@ class AWSM_Geoserver(object):
 
         # All colormaps we want to assign
         colormaps = self.get_keyword_styles(name)
-
+        
         # Default colormap
         if "dynamic_default" in colormaps:
             colormap = "dynamic_default"
@@ -1123,8 +1124,7 @@ class AWSM_Geoserver(object):
         # Create the layer
         resource = "workspaces/{}/datastores/{}/featuretypes".format(basin,
                                                                      dstore)
-        self.get(resource)
-        #self.get(resource)
+
         payload = {"featureType":{"name":keyword,
                             "title":keyword.replace("_"," ").title(),
                             "store":{"name":"{}:{}".format(basin, dstore)}
