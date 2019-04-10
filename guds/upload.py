@@ -173,20 +173,21 @@ class AWSM_Geoserver(object):
         if data_type =="style":
             headers = {'accept':'application/vnd.ogc.sld+xml',
                        'content-type': 'application/vnd.ogc.sld+xml'}
+            mode = 'r'
 
         elif data_type == 'shapefile':
-            headers = {"accept":'application/zip',
-                       "content-type": "application/zip"}
+             headers = {"Content-Type": "application/zip"}
+             mode = 'rb'
+
         else:
             headers = {"accept":'application/octet-stream',
                        "content-type": "application/octet-stream"}
-
+            mode = 'rb'
         request_url = urljoin(self.url, resource)
 
         self.log.debug("PUT/MOVE request to {}".format(request_url))
 
-        with open(fname,'r') as fp:
-
+        with open(fname, mode) as fp:
             r = requests.put(
                 request_url,
                 headers=headers,
@@ -214,12 +215,15 @@ class AWSM_Geoserver(object):
         elif code == 200:
             self.log.debug(msg + " was found successfully!")
 
+        elif code == 201:
+            self.log.debug(msg + " was created successfully!")
+
         elif code == 302:
             self.log.debug(msg + " was redirected.")
         else:
             self.log.debug("Status Code Recieved: {}".format(code))
 
-    def get(self, resource, headers = {'Accept':'application/json'}):
+    def get(self, resource, headers = {'Accept':'application/json'}, skip_json=False):
         """
         Wrapper for requests.get function.
         Retrieves info from the resource and returns the dictionary from the
@@ -243,8 +247,11 @@ class AWSM_Geoserver(object):
         )
 
         self.handle_status(resource, r.status_code)
+        if not skip_json:
+            result = r.json()
+        else:
+            result = r
 
-        result = r.json()
         self.log.debug("GET Returns: {}".format(pformat(result)))
 
         return result
@@ -465,7 +472,7 @@ class AWSM_Geoserver(object):
 
         return final_fname
 
-    def exists(self, basin, store=None, layer=None):
+    def exists(self, basin, store=None, dstore=None, layer=None):
         """
         Checks the geoserver if the object exist already by name. If basin
         store and layer are provided it will check all three and only return
@@ -475,6 +482,7 @@ class AWSM_Geoserver(object):
             basin: String name of the targeted, this script assumes the basin
                    name and workspace are the same.
             store: String name of the data/coverage storage object.
+            dstore: string name of the data store
             layer: String name of the layer
 
         Returns:
@@ -484,15 +492,23 @@ class AWSM_Geoserver(object):
 
         store_exists = None
         layer_exists = None
+        dstore_exists = None
 
-        # We always will check for the basins existance
+        # We always will check for the basins existence
         ws_exists = False
 
-        # Does the workspace > datastore exist
+        # Does the workspace > coveragetore/datastore exist
         if store != None:
             store_exists = False
+            if dstore != None:
+                raise ValueError(" Cannot check for coverage and data stores at"
+                                " the same time")
 
-        # Does the workspace > datastore > layer exist
+        # Check for data stores
+        elif dstore != None:
+            dstore_exists = False
+
+        # Does the workspace > coverage/datastore > layer exist
         if layer != None:
             layer_exists = False
 
@@ -508,12 +524,12 @@ class AWSM_Geoserver(object):
                     ws_exists = True
                     break
 
-            # Store existance requested
+            # coverageStore existence requested
             if store != None:
                 # Grab info about this existing workspace
                 ws_dict = self.get(w['href'])
 
-                # Grab info on any stores
+                # Grab info on any coverage stores
                 cs_dict = self.get(ws_dict['workspace']['coverageStores'])
 
                 # Check if there are any coverage stores
@@ -526,7 +542,23 @@ class AWSM_Geoserver(object):
                             store_exists = True
                             break
 
-            # layer existance requested
+            # Check if there are any datastores
+            elif dstore != None:
+                # Grab info about this existing workspace
+                ws_dict = self.get(w['href'])
+                ds_dict = self.get(ws_dict['workspace']['dataStores'])
+
+                if ds_dict["dataStores"]:
+                    ds_info = ds_dict['dataStores']
+
+                    # Check for matching name in the coverages
+                    for ds in ds_info['dataStore']:
+                        if dstore == ds['name']:
+                            dstore_exists = True
+                            break
+
+
+            # layer existence requested
             if layer != None and store_exists:
                 # Grab info about this existing store
                 store_info = self.get(cs['href'])
@@ -538,11 +570,24 @@ class AWSM_Geoserver(object):
                         if layer == cv['name']:
                             layer_exists = True
 
-        result = [ws_exists, store_exists, layer_exists]
+            # layer existence requested
+        elif layer != None and dstore_exists:
+                # Grab info about this existing store
+                store_info = self.get(ds['href'])
+                vectors = self.get(store_info['coverageStore']['coverages'])
+
+                # Check to see if there any datastores at all
+                if vectors['coverages']:
+                    for v in vectors['coverages']['coverage']:
+                        if layer == v['name']:
+                            layer_exists = True
+
+
+        result = [ws_exists, store_exists, dstore_exists, layer_exists]
         expected = [r for r in result if r != None]
         truth = [r for r in result if r == True]
 
-        msg = " > ".join([r for r in [basin, store, layer] if r !=None])
+        msg = " > ".join([r for r in [basin, store, dstore, layer] if r !=None])
 
         if len(truth) == len(expected):
             self.log.debug("{} already exists on the geoserver.".format(msg))
@@ -732,7 +777,7 @@ class AWSM_Geoserver(object):
                    "".format(basin, store))
 
         lyr_name = layer.replace(" ","_").replace('-','')
-        native_name = lyr_name#layer.replace('_',' ')
+        native_name = lyr_name #layer.replace('_',' ')
 
         # Make the names better/ Rename the isnobal stuff
         if native_name in self.remap.keys():
@@ -1032,24 +1077,61 @@ class AWSM_Geoserver(object):
 
         """
         filename = os.path.abspath(filename)
-        name = os.path.basename(filename).split('.')[0]
-        zipfname = os.path.join(self.tmp, name + '.zip')
-
+        bname = os.path.basename(filename)
+        keyword = bname.split('.')[0]
+        dstore = keyword + "_store"
         # Get all the files associated with the shapefile
         associate_files = os.listdir(os.path.dirname(filename))
-        associate_files = [f for f in associate_files if name in f]
-        self.log.info("Zipping shapefile contents, a total of {} files."
-                  "".format(len(associate_files)))
+        associate_files = [f for f in associate_files if keyword in f]
 
-        # Collect and zip files
-        with ZipFile(zipfname,'w') as zip:
-            for f in associate_files:
-                zip.write(f)
+        resource = "workspaces/{}/datastores".format(basin)
+        if self.exists(basin, dstore=dstore):
+           resource = resource + "/" + dstore
+           self.delete(resource, purge=True, recurse=True)
 
-        # Create a new datastore
-        resource = "/resource/basins/{}/{}".format(basin, zipfname)
+        # Create a new store
+        payload = {"dataStore": {
+                                "name": dstore,
+                                "connectionParameters":
+                                    {"entry":
+                                        [{"@key":"url","$":"file:basins/{}/{}"
+                                                   "".format(basin, bname)}]
 
-        self.move(resource, zipfname, data_type="shp")
+                                    }
+                                }
+                    }
+
+        resource = "workspaces/{}/datastores".format(basin)
+        self.make(resource, payload)
+
+        # Upload the related files
+        self.log.info("Uploading {} files.".format(len(associate_files)))
+
+        for f in associate_files:
+            self.log.debug("Uploading {}".format(f))
+            bname = os.path.basename(f)
+            fresource = "resource/basins/{}/{}".format(basin, bname)
+
+            r = self.get(fresource, skip_json=True)
+
+            if r.status_code == 200:
+                self.delete(fresource, purge=True, recurse=True)
+
+            # Upload each file
+            self.move(fresource, f, data_type="shapefile")
+
+        # Create the layer
+        resource = "workspaces/{}/datastores/{}/featuretypes".format(basin,
+                                                                     dstore)
+        self.get(resource)
+        #self.get(resource)
+        payload = {"featureType":{"name":keyword,
+                            "title":keyword.replace("_"," ").title(),
+                            "store":{"name":"{}:{}".format(basin, dstore)}
+                                 }
+                  }
+
+        self.make(resource, payload)
 
     def download(self, basin, date_str, download_type="modeled"):
         """
