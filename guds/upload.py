@@ -105,6 +105,36 @@ class AWSM_Geoserver(object):
         self.log.info("URL:{}".format(self.url))
         self.log.debug("Base URL: {}".format(self.base_url))
 
+    def post(self, resource, payload):
+        """
+        Wrapper for post request.
+
+        Args:
+            resource: Relative location from the http root
+            payload: Dictionary containing data to transfer.
+
+        Returns:
+            string: request status
+        """
+
+        headers = {'content-type' : 'application/json'}
+        request_url = urljoin(self.url, resource)
+        self.log.debug("POST request to {}".format(request_url))
+        r = requests.post(
+            request_url,
+            headers=headers,
+            json=payload,
+            verify=True,
+            auth=self.credential
+        )
+
+        result = r.raise_for_status()
+
+        self.handle_status(resource,r.status_code)
+
+        self.log.debug("POST request returns {}:".format(result))
+        return result
+
     def make(self, resource, payload):
         """
         Wrapper for post request.
@@ -196,7 +226,7 @@ class AWSM_Geoserver(object):
 
             fp.close()
 
-        self.handle_status(resource,r.status_code)
+        self.handle_status(resource, r.status_code)
 
         self.log.debug("Response from PUT: {}".format(r))
 
@@ -220,6 +250,7 @@ class AWSM_Geoserver(object):
 
         elif code == 302:
             self.log.debug(msg + " was redirected.")
+
         else:
             self.log.debug("Status Code Recieved: {}".format(code))
 
@@ -254,6 +285,37 @@ class AWSM_Geoserver(object):
 
         self.log.debug("GET Returns: {}".format(pformat(result)))
 
+        return result
+
+    def put(self, resource, payload, headers = {'Accept':'application/json'}):
+        """
+        Wrapper for requests.put function.
+        puts info into the resource and returns the dictionary from the
+        json
+
+        Args:
+            resource: Relative location from the http root
+
+        Returns:
+            dict: Dictionary containing infor about the resource
+        """
+
+        request_url = urljoin(self.url, resource)
+        self.log.debug("PUT request to {}".format(request_url))
+
+        r = requests.put(
+            request_url,
+            headers=headers,
+            json=payload,
+            verify=True,
+            auth=self.credential
+        )
+
+        result = r.raise_for_status()
+
+        self.handle_status(resource,r.status_code)
+
+        self.log.debug("PUT request returns {}:".format(result))
         return result
 
     def grab(self, resource, fname):
@@ -724,7 +786,7 @@ class AWSM_Geoserver(object):
         cs_info["coverageStore"]["name"] = name
 
         # Check to see if the store already exists
-        if self.exists(basin, name):
+        if self.exists(basin, store=name):
             resource = "workspaces/{}/coveragestores/{}".format(basin, name)
             self.delete(resource,  purge=True, recurse=True)
 
@@ -834,53 +896,39 @@ class AWSM_Geoserver(object):
             name: name of the layer
             layer_type: raster or vector to identify how we assign defaults
         """
-
-        resource = ("layers/{}:{}".format(basin, name))
-
-
         # All colormaps we want to assign
         colormaps = self.get_keyword_styles(name)
-        
+
         # Default colormap
-        if "dynamic_default" in colormaps:
-            colormap = "dynamic_default"
-        else:
-            colormap = "raster"
+        if layer_type=='raster':
+            colormaps.append("raster")
+            if "dynamic_default" in colormaps:
+                colormaps.append("dynamic_default")
 
-        self.log.info("Assigning {} as default colormap to {}.".format(colormap, name))
+        # Add all the colormaps
+        styles_list = [{"name":c} for c in colormaps]
 
-        # ##################### Correct way but doesn't work ####################
-        #
-        # rjson['layer']["styles"] = {"style": [{"name":cm} for cm in colormaps]}
-        # rjson["layer"]["defaultStyle"] = {"name": colormap}
-        #
-        # rjson["layer"]["opaque"] = True
-        #
-        #r = self.modify(resource, {"layer":{"defaultStyle":{"name":colormap}}})
+        resource = "layers/{}:{}/styles".format(basin, name)
 
+        for c in colormaps:
+            self.log.info("Adding style {} to {}:{}".format(c, basin, name))
+            payload = {"style":{"name":c}}
+            self.post(resource, payload)
+        resource = "layers/{}:{}.json".format(basin, name)
 
-        ##################### HACK VERSION #####################################
-        xml_colormaps = ["\t\t<style><name>{}</name></style>".format(cm) for cm in colormaps]
-        xml_colormaps = "\n".join(xml_colormaps)
-        xml_entry = "<layer><defaultStyle><name>{}</name></defaultStyle></layer>".format(colormap)
+        #payload = "<layer>\n\t<defaultStyle>\n\t\t<name>\n\t\t\t{}\n\t\t</name>\n\t</defaultStyle>\n</layer>".format(colormaps[-1])
 
-        base_cmd = ["curl","-u","{}:{}".format(self.geoserver_username,
-                                          self.geoserver_password),
-               "-XPUT", "-H", '"accept:text/xml"', "-H",'"content-type:text/xml"',
-               urljoin(self.url,resource+'.xml'),"-s","-d"]
-
-        # Add the default style
-        cmd = base_cmd + ['"{}"'.format(xml_entry)]
-        self.log.debug("Executing hack:\n{}".format(" ".join(cmd)))
-        s = sp.check_output(" ".join(cmd), shell=True, universal_newlines=True)
-        self.log.debug(s)
-
-        # Add all the styles available
-        xml_entry = "<layer><styles>{}</styles></layer>".format(xml_colormaps)
-        cmd = base_cmd + ['"{}"'.format(xml_entry)]
-        self.log.debug("Executing hack:\n{}".format(" ".join(cmd)))
-        s = sp.check_output(" ".join(cmd), shell=True, universal_newlines=True)
-        self.log.debug(s)
+        #default = [c for c in styles if colormaps[-1] in c["name"]]
+        # payload = {'layer':{'defaultStyle':{"name":colormaps[-1]}}}
+        r = requests.put(
+            url=urljoin(self.url, resource),
+            json=payload,
+            verify=True,
+            auth=self.credential,
+            allow_redirects=False
+        )
+        self.log.info("Default style for {}:{} set to {}".format(basin, name,
+                                                                 colormaps[-1]))
 
     def get_keyword_styles(self, layer_name):
         """
@@ -908,7 +956,7 @@ class AWSM_Geoserver(object):
         if "dynamic_default" in avail:
             result.append('dynamic_default')
 
-        return result
+        return list(set(result))
 
     def create_layers_from_netcdf(self, basin, store, filename, layers=None,):
         """
@@ -924,7 +972,7 @@ class AWSM_Geoserver(object):
 
         for name in layers:
 
-            if self.exists(basin, store, name):
+            if self.exists(basin, store=store, layer=name):
                 self.log.info("Layer {} from store {} in the {} exists..."
                       "".format(name, store, basin))
                 self.log.warning("Skipping layer {} to geoserver.".format(name))
@@ -1081,6 +1129,7 @@ class AWSM_Geoserver(object):
         bname = os.path.basename(filename)
         keyword = bname.split('.')[0]
         dstore = keyword + "_store"
+
         # Get all the files associated with the shapefile
         associate_files = os.listdir(os.path.dirname(filename))
         associate_files = [f for f in associate_files if keyword in f]
@@ -1132,6 +1181,7 @@ class AWSM_Geoserver(object):
                   }
 
         self.make(resource, payload)
+        self.assign_colormaps(basin, keyword, layer_type="vector")
 
     def download(self, basin, date_str, download_type="modeled"):
         """
