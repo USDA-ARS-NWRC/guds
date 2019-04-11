@@ -21,8 +21,7 @@ from pprint import pformat
 from zipfile import ZipFile
 
 class AWSM_Geoserver(object):
-    def __init__(self, fname, log=None, debug=False, bypass=False, cleanup=True,
-                                                                  no_scp=False):
+    def __init__(self, fname, log=None, debug=False, bypass=False, cleanup=True):
 
         # Setup external logging if need be
         if log==None:
@@ -67,8 +66,6 @@ class AWSM_Geoserver(object):
         # Bypass set to true will answer yes to all yes/no questions
         self.bypass = bypass
 
-        # No scp will avoid copying data. To be used for debugging only
-        self.no_scp = no_scp
         # Extract the base url
         self.base_url = urlparse(self.url).netloc
 
@@ -195,7 +192,7 @@ class AWSM_Geoserver(object):
 
         return r.raise_for_status()
 
-    def move(self, resource, fname, data_type="style"):
+    def move(self, resource, fname, data_type="style", stream=False):
         """
         Wrapper for the put function in the request library, this is written
         to move files from loca to the geoserver
@@ -222,7 +219,8 @@ class AWSM_Geoserver(object):
                 request_url,
                 headers=headers,
                 data=fp,
-                auth=self.credential)
+                auth=self.credential,
+                allow_redirects=True)
 
             fp.close()
 
@@ -287,7 +285,7 @@ class AWSM_Geoserver(object):
 
         return result
 
-    def put(self, resource, payload, headers = {'Accept':'application/json'}):
+    def put(self, resource, payload, headers = {'Accept':'application/json', "Content-Type":"application/json"}):
         """
         Wrapper for requests.put function.
         puts info into the resource and returns the dictionary from the
@@ -295,9 +293,9 @@ class AWSM_Geoserver(object):
 
         Args:
             resource: Relative location from the http root
-
+            payload: Json data
         Returns:
-            dict: Dictionary containing infor about the resource
+            status code
         """
 
         request_url = urljoin(self.url, resource)
@@ -308,7 +306,8 @@ class AWSM_Geoserver(object):
             headers=headers,
             json=payload,
             verify=True,
-            auth=self.credential
+            auth=self.credential,
+            allow_redirects=True
         )
 
         result = r.raise_for_status()
@@ -441,12 +440,11 @@ class AWSM_Geoserver(object):
 
             elif upload_type=='topo':
                 self.date = dt.today().isoformat().split('T')[0]
-
+                mask = fname
                 bname = bname.split(".")[0] + "_{}.nc".format(self.date)
                 fname = bname
                 mask_exlcude = ['mask']
                 keep_vars = ds.variables.keys()
-                mask = fname
 
             fname = os.path.join(self.tmp, fname)
             exclude_vars = [v for v in ds.variables.keys() \
@@ -463,7 +461,7 @@ class AWSM_Geoserver(object):
 
             # Optional Masking
             if mask != None:
-                self.log.info("Masking netcdf using {}...".format(mask))
+                self.log.info("Masking netcdf using {}".format(mask))
                 new_ds.close() # close the last one
                 new_ds = mask_nc(fname, mask, exclude=mask_exlcude,
                                               output=self.tmp)
@@ -504,34 +502,16 @@ class AWSM_Geoserver(object):
         Returns:
             final_fname: The remote path to the file we copied
         """
-        bname =  os.path.basename(fname)
+        bname = os.path.basename(fname)
+        resource = "resource/data/basins/{}/{}".format(basin, bname)
 
-        final_fname = os.path.join(self.data, basin, bname)
         self.log.info("Copying local data to remote, this may take a couple "
                       "minutes...")
 
-        # Form the SCP command, handle if there is no pem file
-        cmd = ["scp"]
+        self.move(resource, fname, data_type="modeled", stream=True)
+        self.log.debug("data sent to : {}".format(fname))
 
-        if hasattr(self,"pem"):
-            cmd.append("-i")
-            cmd.append(self.pem)
-
-        cmd.append(fname)
-        cmd.append("{}@{}:{}".format(self.username, self.base_url, final_fname))
-        self.log.debug(" ".join(cmd))
-
-        try:
-            if self.no_scp:
-                self.log.warn("User requested to NOT copy the data to its"
-                              " final location...")
-            else:
-                s = sp.check_output(cmd, shell=False, universal_newlines=True)
-
-        except Exception as e:
-            self.log.error(e.output)
-            raise e
-
+        final_fname = "data/basins/{}/{}".format(basin, bname)
         return final_fname
 
     def exists(self, basin, store=None, dstore=None, layer=None):
@@ -682,7 +662,8 @@ class AWSM_Geoserver(object):
 
             rjson = self.make('workspaces', payload)
 
-    def create_coveragestore(self, basin, store, filename, description=None):
+    def create_coveragestore(self, basin, store, filename, remote_filename,
+                                                            description=None):
         """
         Creates a coverage data store for raster type data on the geoserver.
 
@@ -722,8 +703,7 @@ class AWSM_Geoserver(object):
                                     "_default":False,
                                     "workspace":{"name": basin},
                                     "configure":"all",
-                                    "url":"file:basins/{}/{}".format(basin,
-                                    bname)}}
+                                    "url":"file:{}".format(remote_filename)}}
         if description != None:
             payload['coverageStore']["description"] = description
 
@@ -807,7 +787,6 @@ class AWSM_Geoserver(object):
 
         if coverages['coverages']:
             for c in coverages['coverages']['coverage']:
-                print(c)
                 cov_info = self.get(c['href'])["coverage"]
 
                 cov_name = self.get_latest_name(cov_info['name'])
@@ -866,7 +845,7 @@ class AWSM_Geoserver(object):
                                "nativeCoverageName":native_name,
                                "store":{"name": "{}:{}".format(basin, store)},
                                "enabled":True,
-                               "title":title,
+                               "title":title
                                }}
 
         # If we have ranges for the layer, use it.
@@ -902,33 +881,29 @@ class AWSM_Geoserver(object):
         # Default colormap
         if layer_type=='raster':
             colormaps.append("raster")
+
             if "dynamic_default" in colormaps:
                 colormaps.append("dynamic_default")
 
-        # Add all the colormaps
+        # Add all the colormaps on at a time
         styles_list = [{"name":c} for c in colormaps]
-
-        resource = "layers/{}:{}/styles".format(basin, name)
-
+        resource = "layers/{}:{}/styles.json".format(basin, name)
         for c in colormaps:
             self.log.info("Adding style {} to {}:{}".format(c, basin, name))
             payload = {"style":{"name":c}}
             self.post(resource, payload)
-        resource = "layers/{}:{}.json".format(basin, name)
 
-        #payload = "<layer>\n\t<defaultStyle>\n\t\t<name>\n\t\t\t{}\n\t\t</name>\n\t</defaultStyle>\n</layer>".format(colormaps[-1])
+        # Currently Erases all my added styles when I attempt to add default
+        # self.log.info("Default style for {}:{} set to {}".format(basin, name,
+        #                 colormaps[-1]))
+        # Set the default colormap which should always be the last one
+        # styles = self.get(resource)["styles"]
+        # default = [c for c in styles["style"] if c["name"]==colormaps[-1]][0]
+        # payload = {"layer":{"defaultStyle":default}}
+        #
+        # resource = "layers/{}:{}.json".format(basin, name)
+        # r = self.put(resource, payload)
 
-        #default = [c for c in styles if colormaps[-1] in c["name"]]
-        # payload = {'layer':{'defaultStyle':{"name":colormaps[-1]}}}
-        r = requests.put(
-            url=urljoin(self.url, resource),
-            json=payload,
-            verify=True,
-            auth=self.credential,
-            allow_redirects=False
-        )
-        self.log.info("Default style for {}:{} set to {}".format(basin, name,
-                                                                 colormaps[-1]))
 
     def get_keyword_styles(self, layer_name):
         """
@@ -995,7 +970,6 @@ class AWSM_Geoserver(object):
             upload_type: Determines how the data is uploaded
             mask: Filename of a netcdf containing a mask layer
         """
-
         self.log.info("Associated Basin: {}".format(basin))
         self.log.info("Data Upload Type: {}".format(upload_type))
         self.log.info("Source Filename: {}".format(filename))
@@ -1038,10 +1012,10 @@ class AWSM_Geoserver(object):
 
         # Check for the upload type which determines the filename, and store
         if upload_type == 'topo':
-            self.submit_topo(remote_fname, basin, layers=layers)
+            self.submit_topo(filename, remote_fname, basin, layers=layers)
 
         elif upload_type == 'modeled':
-            self.submit_modeled(remote_fname, basin, layers=layers)
+            self.submit_modeled(filename, remote_fname, basin, layers=layers)
 
         elif upload_type == 'flight':
             self.log.error("Uploading flights is undeveloped")
@@ -1057,7 +1031,7 @@ class AWSM_Geoserver(object):
             self.log.info("Cleaning up files... Removing {}".format(self.tmp))
             rmtree(self.tmp)
 
-    def submit_topo(self, filename, basin, layers=None):
+    def submit_topo(self, filename, remote_filename, basin, layers=None):
         """
         Uploads the basins topo images which are static. These images include:
         * dem
@@ -1070,19 +1044,20 @@ class AWSM_Geoserver(object):
             basin: Basin associated to the topo image
             layers: Netcdf variables names to add as layers on GS
         """
+
         # Always call store names the same thing, <basin>_topo
         store_name = "{}_topo".format(basin)
         description = ("NetCDF file containing topographic images required for"
                        " modeling the {} watershed in AWSM.\n"
                        "Uploaded: {}").format(basin, self.date)
 
-        self.create_coveragestore(basin, store_name, filename,
+        self.create_coveragestore(basin, store_name, filename, remote_filename,
                                                      description=description)
 
         self.create_layers_from_netcdf(basin, store_name, filename,
                                                           layers=layers)
 
-    def submit_modeled(self, filename, basin, layers=None):
+    def submit_modeled(self, filename, remote_filename, basin, layers=None):
         """
         Uploads the basins modeled data. These images include:
         * density
@@ -1107,7 +1082,7 @@ class AWSM_Geoserver(object):
                                        self.date,
                                        dt.today().isoformat().split('T')[0])
 
-        self.create_coveragestore(basin, store_name, filename,
+        self.create_coveragestore(basin, store_name, filename, remote_filename,
                                                      description=description)
 
         # Create layers density, specific mass, thickness
@@ -1243,13 +1218,13 @@ class AWSM_Geoserver(object):
 
                 # Skip it
                 else:
-                    self.lof.warn("Skipping overwriting {}!".format(style_name))
+                    self.log.warn("Skipped overwriting {}!".format(style_name))
                     skip = True
 
             # Upload that bad boy
             if not skip:
                 self.log.info("Adding the {} style to the geoserver...".format(style_name))
-                payload = {"style":{"name":style_name, "filename":f}}
+                payload = {"style":{"name":style_name, "filename":os.path.basename(f)}}
                 resource = "styles/"
 
                 # Create the placeholder
@@ -1398,10 +1373,6 @@ def main():
     p.add_argument('-do','--download', dest='download',
                     help="Receives a date for downloading files")
 
-    p.add_argument('-nscp','--no_scp', dest='no_scp', action='store_true',
-                    help="When used, it doesn't upload the files to the remote."
-                    " Not to be used for other than debugging.")
-
     p.add_argument('-l','--latest', dest='latest', action="store_true",
                     help="If used guds will also create a latest layer if "
                          "after uploading by looking at all the layers "
@@ -1420,11 +1391,14 @@ def main():
         # Get an instance to interact with the geoserver.
         gs = AWSM_Geoserver(args.credentials, debug=args.debug,
                                               bypass=args.bypass,
-                                              cleanup=args.cleanup,
-                                              no_scp=args.no_scp)
+                                              cleanup=args.cleanup)
 
         if args.download != None:
             # Download a file
+            if args.basin == None:
+                gs.log.error("Basin name required for downloading data!")
+                sys.exit()
+
             gs.download(args.basin, args.download, download_type=args.data_type)
 
         else:
@@ -1438,6 +1412,9 @@ def main():
                     gs.submit_styles(args.filenames)
 
                 else:
+                    if args.basin == None:
+                        gs.log.error("Basin name required for uploading data!")
+                        sys.exit()
                     # Upload a file
                     gs.upload(args.basin, args.filenames[0],
                                           upload_type=args.data_type,
