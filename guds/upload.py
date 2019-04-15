@@ -484,7 +484,7 @@ class AWSM_Geoserver(object):
 
         return fname
 
-    def copy_data(self, fname, basin, upload_type='modeled'):
+    def copy_data(self, fname, basin):
         """
         Data for the geoserver has to be in the host location for this. We
 
@@ -494,7 +494,6 @@ class AWSM_Geoserver(object):
             fname: String path to a local file.
             basin: String name of the targeted basin/workspace to put the file
                    in
-            upload_type: specifies whether to name a file differently
 
         Returns:
             final_fname: The remote path to the file we copied
@@ -659,16 +658,17 @@ class AWSM_Geoserver(object):
 
             rjson = self.make('workspaces', payload)
 
-    def create_coveragestore(self, basin, store, filename, remote_filename,
-                                                            description=None):
+    def create_coveragestore(self, basin, store, filename, description=None,
+                                                           store_type="NetCDF"):
         """
         Creates a coverage data store for raster type data on the geoserver.
 
         Args:
             basin: String name of the targeted basin/workspace
             store: String name of the new coverage data store
-            filename: Netcdf to associate with store, must exist locally to
-                      geoserver
+            filename: to a netcdf/geotiff on the geoserver
+            description: text to include with the file
+            store_type: Geotiff or Netcdf for coverage
 
         """
 
@@ -684,8 +684,9 @@ class AWSM_Geoserver(object):
                            "".format(store), bypass=self.bypass)
 
             if ans:
-                resource = "workspaces/{}/coveragestores/{}.json".format(basin, store)
-                self.delete(resource, recurse=True)
+                resource = "workspaces/{}/coveragestores/{}.json".format(basin,
+                                                                         store)
+                self.delete(resource, recurse=True, purge=True)
 
             else:
                 self.log.info("Unable to continue, exiting...")
@@ -695,12 +696,12 @@ class AWSM_Geoserver(object):
         resource = 'workspaces/{}/coveragestores.json'.format(basin)
 
         payload = {"coverageStore":{"name":store,
-                                    "type":"NetCDF",
+                                    "type":store_type,
                                     "enabled":True,
                                     "_default":False,
                                     "workspace":{"name": basin},
                                     "configure":"all",
-                                    "url":"file:{}".format(remote_filename)}}
+                                    "url":"file:{}".format(filename)}}
         if description != None:
             payload['coverageStore']["description"] = description
 
@@ -824,10 +825,14 @@ class AWSM_Geoserver(object):
             name = lyr_name
 
         # Human readable title for geoserver UI
-        if name.lower() == 'swe':
+        lname = name.lower()
+        if lname == 'swe':
             title = ("{} {} {}".format(basin.title(),
                                        self.date,
                                        name.upper())).replace("_"," ")
+        elif "super" in lname:
+            title = ("{} {} Lidar Flight".format(basin.title(), self.date))
+
         else:
             title = ("{} {} {}".format(basin,
                                        self.date,
@@ -993,9 +998,6 @@ class AWSM_Geoserver(object):
                                                    espg=espg,
                                                    mask=mask)
 
-            # Copy users data up to the remote location
-            remote_fname = self.copy_data(filename, basin, upload_type=upload_type)
-
             # Grab the layer names
             ds = Dataset(filename)
 
@@ -1008,6 +1010,9 @@ class AWSM_Geoserver(object):
                 self.log.error("No variables found in netcdf...exiting.")
                 sys.exit()
 
+        # Copy users data up to the remote location
+        remote_fname = self.copy_data(filename, basin)
+
         # Check for the upload type which determines the filename, and store
         if upload_type == 'topo':
             self.submit_topo(filename, remote_fname, basin, layers=layers)
@@ -1016,13 +1021,13 @@ class AWSM_Geoserver(object):
             self.submit_modeled(filename, remote_fname, basin, layers=layers)
 
         elif upload_type == 'flight':
-            self.log.error("Uploading flights is undeveloped")
+            self.submit_flight(remote_fname, basin)
 
         elif upload_type == 'shapefile':
             self.submit_shapefile(filename, basin)
 
         else:
-            raise ValueError("Invalid upload type!")
+            raise ValueError("Invalid or undeveloped upload type requested!")
 
         # Cleanup
         if self.cleanup:
@@ -1049,7 +1054,7 @@ class AWSM_Geoserver(object):
                        " modeling the {} watershed in AWSM.\n"
                        "Uploaded: {}").format(basin, self.date)
 
-        self.create_coveragestore(basin, store_name, filename, remote_filename,
+        self.create_coveragestore(basin, store_name, remote_filename,
                                                      description=description)
 
         self.create_layers_from_netcdf(basin, store_name, filename,
@@ -1080,7 +1085,7 @@ class AWSM_Geoserver(object):
                                        self.date,
                                        dt.today().isoformat().split('T')[0])
 
-        self.create_coveragestore(basin, store_name, filename, remote_filename,
+        self.create_coveragestore(basin, store_name, remote_filename,
                                                      description=description)
 
         # Create layers density, specific mass, thickness
@@ -1221,8 +1226,10 @@ class AWSM_Geoserver(object):
 
             # Upload that bad boy
             if not skip:
-                self.log.info("Adding the {} style to the geoserver...".format(style_name))
-                payload = {"style":{"name":style_name, "filename":os.path.basename(f)}}
+                self.log.info("Adding the {} style to the geoserver..."
+                                                          "".format(style_name))
+                payload = {"style":{"name":style_name,
+                                    "filename":os.path.basename(f)}}
                 resource = "styles/"
 
                 # Create the placeholder
@@ -1244,6 +1251,35 @@ class AWSM_Geoserver(object):
 
             for lyr in layers:
                 self.assign_colormaps(b, lyr)
+
+    def submit_flight(self, filename, basin):
+        """
+        Uploads an ASO 3m lidar overpass. Date should be in the filename such as
+        USCALB20190325_SUPERsnow_depth.tif is for the lakes basin on 2019-03-25
+
+        Args:
+            filename: Remote name of the file
+            basin: basin the file is associated with
+        """
+
+        # Naming
+        bname = os.path.basename(filename).split('.')[0]
+        store = bname + "_store"
+
+        # Dates
+        no_format_date = "".join([s for s in store if s.isnumeric()])
+        self.date = pd.to_datetime(no_format_date).date().isoformat()
+
+        self.log.info("Identified flight date as: {}".format(self.date))
+        description = ("ASO 3 meter lidar over pass for the {} basin on {}"
+                      "".format(basin, self.date))
+
+        # Create the store which also creates the layer
+        self.create_coveragestore(basin, store, filename,
+                                                description=description,
+                                                store_type='GeoTIFF')
+
+        self.create_layer(basin, store, bname)
 
     def get_latest_name(self, name_o):
         """
