@@ -8,7 +8,6 @@ source and the geoserver.
 
 ### Prerequisites
 
-* curl
 * Python 3.5 +
 * A geoserver to push to
 
@@ -42,19 +41,22 @@ GUDS is designed to handle 3 different types of data.
 day of spatial data representing the snowpack parameters. The netcdf should at
 at leat contain the variables: specific_mass, thickness, snow_density
 
-2. Topographic - To run AWSM, there is a set of static images required that describe
-the envrionment to the modeling system. This file should also be a netcdf and
-any images in the file will be uploaded.
+2. Topographic - To run AWSM, there is a set of static images required that
+describe the envrionment to the modeling system. This file should also be a
+netcdf and any images in the file will be uploaded.
 
 3. Flights - Eventually  Lidar snow depth images will be uploadable, in the
 mean time it is under development.
 
-4. Styles - Upload SLD type styles to the geoserver, currently only applies to rasters
+4. Styles - Upload SLD type styles to the geoserver, currently only applies to
+rasters
+
+5. shapefiles - upload .shp files to the geoserver. Note that all the supporting
+files must exist in the same path, e.g. (tuolumne.shp, tuolumne.prj ...)
 
 ### Download Type
 
 1. Modeled Output - Original netcdf of the modeled data can be downloaded
-
 
 ### Specifying the basin
 To upload data, GUDS must receive a basin flag to know how to organize it.
@@ -73,10 +75,8 @@ logging on which is assumed to be `./geoserver.json`. It should contain the
 following keys:
 
   * url - url of the AWS instance
-  * remote_username - user name on the AWS instance associated to the geoserver
   * geoserver_username - username on the geoserver
   * geoserver_password - Password for the geoserver
-  * pem - Location of the .pem for accesssing the AWS instance
   * data - Location of the data folder on the server
 
 After installing you can also run the following to get a blank credentials file.

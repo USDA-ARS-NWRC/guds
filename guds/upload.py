@@ -60,9 +60,6 @@ class AWSM_Geoserver(object):
             self.url +='/'
         self.url = urljoin(self.url,'rest/')
 
-        # User name on the server hosting the geoserver
-        self.username = cred['remote_username']
-
         # Bypass set to true will answer yes to all yes/no questions
         self.bypass = bypass
 
@@ -275,8 +272,8 @@ class AWSM_Geoserver(object):
             auth=self.credential
         )
 
-        self.handle_status(resource, r.status_code)
         if not skip_json:
+            self.handle_status(resource, r.status_code)
             result = r.json()
         else:
             result = r
@@ -836,7 +833,7 @@ class AWSM_Geoserver(object):
                                        self.date,
                                        name)).replace("_"," ").title()
 
-        # Add an associated Date to the layer
+        # Add an associated date to the layer
         if hasattr(self,'date'):
             name = "{}{}".format(name, self.date.replace('-',''))
 
@@ -860,6 +857,7 @@ class AWSM_Geoserver(object):
                                                 }
         # submit the payload for creating a new coverage
         self.log.debug("Payload: {}".format(payload))
+
         response = self.make(resource, payload)
 
         # Assign Colormaps
@@ -1311,8 +1309,8 @@ def write_json(bypass=False):
 
     with open(fname, 'w') as fp:
         line = \
-        ('{"url":"",\n"remote_username":"",\n"geoserver_username":"",\n'
-        '"geoserver_password":"",\n"pem":"",\n"data":""}\n')
+        ('{"url":"",\n"geoserverusername":"",\n'
+        '"geoserver_password":"",\n"data":""}\n')
         fp.write(line)
         fp.close()
 
