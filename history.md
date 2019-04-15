@@ -21,3 +21,8 @@
 
 * Writes a new layer for each modeled variable called latest
 
+### 0.5.0
+
+* Fixed major issue with pushing data, no scp required
+* Uploads Shapefiles
+* Uploads Lidar flights
