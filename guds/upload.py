@@ -232,6 +232,7 @@ class AWSM_Geoserver(object):
         Handles logging code
         """
         msg = "Resource {}".format(resource)
+        self.log.debug("Status Code Recieved: {}".format(code))
 
         if code == 404:
             self.log.error(msg + " was not found on geoserver.".format(resource))
@@ -246,8 +247,6 @@ class AWSM_Geoserver(object):
         elif code == 302:
             self.log.debug(msg + " was redirected.")
 
-        else:
-            self.log.debug("Status Code Recieved: {}".format(code))
 
     def get(self, resource, headers = {'Accept':'application/json'}, skip_json=False):
         """
@@ -325,6 +324,7 @@ class AWSM_Geoserver(object):
         """
 
         request_url = urljoin(self.url, resource)
+
         self.log.debug("GET/GRAB request to {}".format(request_url))
 
         r = requests.get(
@@ -332,11 +332,16 @@ class AWSM_Geoserver(object):
             stream=True,
             verify=True,
             auth=self.credential,
+            allow_redirects=True
         )
+# /geoserver/rest/resource/data/basins/kings/masked_snow_20180418.nc
+#
+# /geoserver/rest/resource/data/basins/kings/masked_snow_20190418.nc
+
 
         self.handle_status(resource,r.status_code)
 
-        self.log.info("Writing data...".format(fname))
+        self.log.info("Writing data to {} ...".format(fname))
         with open(fname,"wb") as fp:
             for chunk in r.iter_content(chunk_size=1024):
                  # writing one chunk at a time to pdf file
@@ -499,7 +504,7 @@ class AWSM_Geoserver(object):
             final_fname: The remote path to the file we copied
         """
         bname = os.path.basename(fname)
-        resource = "resource/data/basins/{}/{}".format(basin, bname)
+        resource = "{}/{}/{}".format(self.data, basin, bname)
 
         self.log.info("Copying local data to remote, this may take a couple "
                       "minutes...")
@@ -507,7 +512,7 @@ class AWSM_Geoserver(object):
         self.move(resource, fname, data_type="modeled", stream=True)
         self.log.debug("data sent to : {}".format(fname))
 
-        final_fname = "data/basins/{}/{}".format(basin, bname)
+        final_fname = "{}/{}/{}".format(self.data, basin, bname)
         return final_fname
 
     def exists(self, basin, store=None, dstore=None, layer=None):
@@ -1173,6 +1178,7 @@ class AWSM_Geoserver(object):
 
         if download_type == "modeled":
             fname = "masked_snow_{}.nc".format(date_str)
+
         else:
             self.log.error("{} data downloads have not been develop yet!")
             sys.exit()
@@ -1180,8 +1186,7 @@ class AWSM_Geoserver(object):
         self.log.info("Download Requested. Attempting to download {} from the "
                       "{}.".format(fname, basin))
 
-        resource = "resource/basins/{}/{}".format(basin,fname)
-
+        resource = "{}/{}/{}".format(self.data, basin,fname)
         self.grab(resource, fname)
 
     def submit_styles(self, local_files, basin=None):
