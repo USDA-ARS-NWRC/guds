@@ -458,8 +458,8 @@ class AWSM_Geoserver(object):
 
             # Calculate mins and maxes
             for lyr in [l for l in keep_vars if l not in ['x','y','time','projection']]:
-                self.ranges[lyr] = [np.min(new_ds.variables[lyr][:]),
-                                    np.max(new_ds.variables[lyr][:])]
+                self.ranges[lyr] = [np.nanmin(new_ds.variables[lyr][:]),
+                                    np.nanmax(new_ds.variables[lyr][:])]
 
             # Optional Masking
             if mask != None:
@@ -512,7 +512,10 @@ class AWSM_Geoserver(object):
         self.move(resource, fname, data_type="modeled", stream=True)
         self.log.debug("data sent to : {}".format(fname))
 
-        final_fname = "{}/{}/{}".format(self.data, basin, bname)
+        # Geoserver paths don't see the resource folder.
+        final_fname = "{}/{}/{}".format(os.path.basename(self.data), basin, bname)
+        self.log.debug("File path for the geoserver is: {}".format(final_fname))
+
         return final_fname
 
     def exists(self, basin, store=None, dstore=None, layer=None):
@@ -859,6 +862,7 @@ class AWSM_Geoserver(object):
         if lyr_name in self.ranges.keys():
             self.log.info("Setting range for {} to {}..."
                           "".format(lyr_name, self.ranges[lyr_name]))
+
             payload["coverage"]["dimensions"] = {"coverageDimension":[
                         {"name":"{}".format(name),
                          "range":{"min":"{}".format(self.ranges[lyr_name][0]),
@@ -867,6 +871,12 @@ class AWSM_Geoserver(object):
                                                 }
         # submit the payload for creating a new coverage
         self.log.debug("Payload: {}".format(payload))
+
+        # Check if it exists first
+        if self.exists(basin, store=store, layer=name):
+            self.delete("workspaces/{}/coveragestores/{}/coverages/{}"
+                        "".format(basin, store, layer), purge=True,
+                                                        recursive=True)
 
         response = self.make(resource, payload)
 
@@ -1369,7 +1379,7 @@ def main():
 
     p.add_argument('-b','--basin', dest='basin',
                     choices=['brb', 'kaweah', 'kings', 'lakes', 'merced',
-                             'sanjoaquin','tuolumne'], required=False,
+                             'sanjoaquin','tuolumne','gunnison'], required=False,
                     help="Basin name to submit to which is also the geoserver"
                          " workspace name")
 
