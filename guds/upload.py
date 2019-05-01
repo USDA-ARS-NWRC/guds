@@ -1041,6 +1041,9 @@ class AWSM_Geoserver(object):
         elif upload_type == 'shapefile':
             self.submit_shapefile(filename, basin)
 
+        elif upload_type == 'png':
+            pass
+
         else:
             raise ValueError("Invalid or undeveloped upload type requested!")
 
@@ -1390,7 +1393,7 @@ def main():
 
     p.add_argument('-t','--data_type', dest='data_type',
                     default='modeled',
-                    choices=['flight','topo','shapefile','modeled','styles'],
+                    choices=['flight','topo','shapefile','modeled','styles','png'],
                     required=False,
                     help="Data type dictates how some items are "
                          "uploaded/downloaded.")
