@@ -83,8 +83,8 @@ class AWSM_Geoserver(object):
                       'thickness':'depth'}
 
         # Auto assign layers to colormaps
-        self.colormaps_keys = ["depth","density","swe", "dem",
-                            "veg","height","mask","basin","subbasin"]
+        self.colormaps_keys = ["depth", "density","swe", "dem", "cold_content",
+                            "veg","height", "mask", "basin", "subbasin"]
         # temporary directory
         self.tmp = 'tmp'
 
@@ -432,9 +432,16 @@ class AWSM_Geoserver(object):
                 fname = bname
 
                 # Only copy some of the variables
-                keep_vars = ['x','y','time','snow_density','specific_mass',
-                                                           'thickness',
-                                                           'projection']
+                if "cold_content" in ds.variables.keys():
+                    self.log.info("Uploading energetics file, only uploading "
+                                  "cold_content")
+                    keep_vars = ['x','y','time','projection','cold_content']
+                else:
+                    self.log.info("Uploading snow state file, only uploading "
+                                  "specific_mass, thickness, and snow_density")
+                    keep_vars = ['x','y','time','projection', 'snow_density',
+                                                              'specific_mass',
+                                                              'thickness']
 
                 exclude_vars = [v for v in ds.variables.keys() \
                                 if v not in keep_vars]
@@ -1264,10 +1271,19 @@ class AWSM_Geoserver(object):
 
         for b in basins:
             layers = self.get_layers(b)
-            self.log.info("Assigning styles to {} layers on the {}"
-                          "".format(len(layers), b))
 
+            # Go back and assign colormaps only to the ones that we mess with
+            for f in local_files:
+                keys = [k for k in self.colormaps_keys if k in f]
+
+            final_layers = []
             for lyr in layers:
+                if len([True for k in keys if k in lyr]) > 0:
+                    final_layers.append(lyr)
+
+            self.log.info("Assigning style to {} layers on the {}"
+                          "".format(len(final_layers), b))
+            for lyr in final_layers:
                 self.assign_colormaps(b, lyr)
 
     def submit_flight(self, filename, basin):
