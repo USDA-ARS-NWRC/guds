@@ -80,7 +80,8 @@ class AWSM_Geoserver(object):
         # Names we want to remap
         self.remap = {'snow_density':'density',
                       'specific_mass':'SWE',
-                      'thickness':'depth'}
+                      'thickness':'depth',
+                      'cold_content':'cold_content'}
 
         # Auto assign layers to colormaps
         self.colormaps_keys = ["depth", "density","swe", "dem", "cold_content",
@@ -113,7 +114,7 @@ class AWSM_Geoserver(object):
 
         headers = {'content-type' : 'application/json'}
         request_url = urljoin(self.url, resource)
-        self.log.debug("POST request to {}".format(request_url))
+        self.log.debug("POST request to {} with {}".format(request_url, payload))
         r = requests.post(
             request_url,
             headers=headers,
@@ -400,6 +401,9 @@ class AWSM_Geoserver(object):
 
     def extract_data(self, fname, upload_type='modeled', espg=None, mask=None):
         """
+        This assumes a snow.nc is always next to an em.nc file. Or vice versa.
+        It then extracts and joins the variables that are being requested.
+
         Args:
             fname: String path to a local file.
             upload_type: specifies whether to name a file differently
@@ -412,17 +416,38 @@ class AWSM_Geoserver(object):
 
         # Check for netcdfs
         if fname.split('.')[-1] == 'nc':
-            # AWSM related items should have a variable called projection
-            ds = Dataset(fname, 'r')
-
             # Base file name
             bname = os.path.basename(fname)
 
             if upload_type=='modeled':
 
+                if "snow.nc" in bname:
+                    snow_fname = fname
+                    em_fname = os.path.join(os.path.dirname(fname), 'em.nc')
+
+                elif "em.nc" in bname:
+                    em_fname = fname
+                    snow_fname = os.path.join(os.path.dirname(fname), 'snow.nc')
+
+                else:
+                    self.log.error("Unable to determine which modeled files are "
+                    "which. Please use files named either "
+                    "snow.nc or em.nc to upload properly.")
+                    sys.exit()
+                bname = os.path.basename(snow_fname)
+                # Check if both exist.
+                for f in [snow_fname, em_fname]:
+                    if not os.path.isfile(f):
+                        self.log.error("{} does not exist.".format(f))
+                        sys.exit()
+
+                # Create Datasets
+                em_ds = Dataset(snow_fname, 'r')
+                snow_ds = Dataset(em_fname)
+
                 # Add a parsed date to the string to avoid overwriting snow.nc
                 self.log.info("Retrieving date from netcdf...")
-                time = ds.variables['time']
+                time = snow_ds.variables['time']
                 dates = num2date(time[:], units=time.units,
                                           calendar=time.calendar)
                 self.date = dates[0].isoformat().split('T')[0]
@@ -431,20 +456,30 @@ class AWSM_Geoserver(object):
                 bname = bname.split(".")[0] + "_{}.nc".format(cleaned_date)
                 fname = bname
 
-                # Only copy some of the variables
-                if "cold_content" in ds.variables.keys():
-                    self.log.info("Uploading energetics file, only uploading "
-                                  "cold_content")
-                    keep_vars = ['x','y','time','projection','cold_content']
-                else:
-                    self.log.info("Uploading snow state file, only uploading "
-                                  "specific_mass, thickness, and snow_density")
-                    keep_vars = ['x','y','time','projection', 'snow_density',
-                                                              'specific_mass',
-                                                              'thickness']
+                # Create a copy and join data
+                keep_vars = ['x','y','time','projection']
 
-                exclude_vars = [v for v in ds.variables.keys() \
-                                if v not in keep_vars]
+                exclude_vars = [v for v in snow_ds.variables.keys() if v not in keep_vars]
+                new_ds = copy_nc(snow_ds, os.path.join(self.tmp,fname),exclude = exclude_vars)
+
+                self.log.info("Joining datasets and copy over variables: {}"
+                              "".format( ", ".join(keep_vars)))
+                keep_vars = self.remap.keys()
+                for var in keep_vars:
+                    if var in snow_ds.variables.keys():
+                        variable = snow_ds.variables[var]
+                    elif var in em_ds.variables.keys():
+                        variable = em_ds.variables[var]
+                    else:
+                        self.log.error("{} not in either modeled data file.")
+                        sys.exit()
+
+                    new_ds.createVariable(var, variable.datatype,
+                                                variable.dimensions)
+                    new_ds.variables[var][:] = variable[:]
+                snow_ds.close()
+                em_ds.close()
+
                 mask_exlcude = []
 
             elif upload_type=='topo':
@@ -455,32 +490,33 @@ class AWSM_Geoserver(object):
                 mask_exlcude = ['mask']
                 keep_vars = ds.variables.keys()
 
-            fname = os.path.join(self.tmp, fname)
-            exclude_vars = [v for v in ds.variables.keys() \
-                            if v not in keep_vars]
+                fname = os.path.join(self.tmp, fname)
+                exclude_vars = [v for v in ds.variables.keys() \
+                                if v not in keep_vars]
 
-            # Create a copy
-            self.log.info("Copying netcdf...")
-            new_ds = copy_nc(ds, fname, exclude = exclude_vars)
+                # Create a copy
+                self.log.info("Copying netcdf...")
+                new_ds = copy_nc(ds, fname, exclude = exclude_vars)
+                ds.close()
 
             # Calculate mins and maxes
             for lyr in [l for l in keep_vars if l not in ['x','y','time','projection']]:
                 self.ranges[lyr] = [np.nanmin(new_ds.variables[lyr][:]),
                                     np.nanmax(new_ds.variables[lyr][:])]
+            fname = new_ds.filepath()
 
             # Optional Masking
             if mask != None:
+                new_ds.close()
+
                 self.log.info("Masking netcdf using {}".format(mask))
-                new_ds.close() # close the last one
                 new_ds = mask_nc(fname, mask, exclude=mask_exlcude,
                                               output=self.tmp)
                 fname = new_ds.filepath()
 
-
             # Check for missing projection
             if 'projection' not in new_ds.variables:
                 self.log.info("Netcdf is missing projection information...")
-
                 # Missing ESPG from args
                 if espg == None:
                     espg = input("No projection detected. Enter the ESPG code"
@@ -491,8 +527,8 @@ class AWSM_Geoserver(object):
                 new_ds = add_proj(new_ds, espg)
 
             # Clean up
+            fname = new_ds.filepath()
             new_ds.close()
-            ds.close()
 
         return fname
 
@@ -510,6 +546,7 @@ class AWSM_Geoserver(object):
         Returns:
             final_fname: The remote path to the file we copied
         """
+
         bname = os.path.basename(fname)
         resource = "{}/{}/{}".format(self.data, basin, bname)
 
@@ -517,7 +554,7 @@ class AWSM_Geoserver(object):
                       "minutes...")
 
         self.move(resource, fname, data_type="modeled", stream=True)
-        self.log.debug("data sent to : {}".format(fname))
+        self.log.info("Data sent to: {}".format(resource))
 
         # Geoserver paths don't see the resource folder.
         final_fname = "{}/{}/{}".format(os.path.basename(self.data), basin, bname)
@@ -864,7 +901,7 @@ class AWSM_Geoserver(object):
                                "enabled":True,
                                "title":title
                                }}
-
+        print(payload)
         # If we have ranges for the layer, use it.
         if lyr_name in self.ranges.keys():
             self.log.info("Setting range for {} to {}..."
@@ -958,7 +995,7 @@ class AWSM_Geoserver(object):
 
         return list(set(result))
 
-    def create_layers_from_netcdf(self, basin, store, filename, layers=None,):
+    def create_layers_from_netcdf(self, basin, store, layers=None,):
         """
         Opens a netcdf locally and adds all layers to the geoserver that are in
         the entire image if layers = None otherwise adds only the layers listed.
@@ -1024,9 +1061,10 @@ class AWSM_Geoserver(object):
             ds = Dataset(filename)
 
             layers = []
-            for name, v in ds.variables.items():
+            for name in ds.variables.keys():
                 if name not in ['time','x','y','projection']:
                     layers.append(name)
+            self.log.info("Uploading {} from netcdf...".format(", ".join(layers)))
 
             if len(layers) == 0:
                 self.log.error("No variables found in netcdf...exiting.")
@@ -1082,8 +1120,7 @@ class AWSM_Geoserver(object):
         self.create_coveragestore(basin, store_name, remote_filename,
                                                      description=description)
 
-        self.create_layers_from_netcdf(basin, store_name, filename,
-                                                          layers=layers)
+        self.create_layers_from_netcdf(basin, store_name, layers=layers)
 
     def submit_modeled(self, filename, remote_filename, basin, layers=None):
         """
@@ -1093,7 +1130,8 @@ class AWSM_Geoserver(object):
         * depth
 
         Args:
-            filename: Remote path of a netcdf to upload
+            filename: local path of a netcdf to upload
+            remote_filename: Path to the file as the geoserver sees it
             basin: Basin associated to the topo image
             layers: Netcdf variables names to add as layers on GS
 
@@ -1113,9 +1151,8 @@ class AWSM_Geoserver(object):
         self.create_coveragestore(basin, store_name, remote_filename,
                                                      description=description)
 
-        # Create layers density, specific mass, thickness
-        self.create_layers_from_netcdf(basin, store_name, filename,
-                                                          layers=layers)
+        # Create layers density, specific mass, thickness, cold_content
+        self.create_layers_from_netcdf(basin, store_name, layers=layers)
 
     def submit_shapefile(self, filename, basin, layer=None):
         """
