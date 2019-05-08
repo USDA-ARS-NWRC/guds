@@ -901,7 +901,7 @@ class AWSM_Geoserver(object):
                                "enabled":True,
                                "title":title
                                }}
-        print(payload)
+
         # If we have ranges for the layer, use it.
         if lyr_name in self.ranges.keys():
             self.log.info("Setting range for {} to {}..."

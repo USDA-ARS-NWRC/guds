@@ -26,3 +26,11 @@
 * Fixed major issue with pushing data, no scp required
 * Uploads Shapefiles
 * Uploads Lidar flights
+
+
+### 0.6.0
+
+* Added in PNG uploading for serving tables
+* Added in Cold Content
+* Modeled results get merged (snow.nc and em.nc)
+
