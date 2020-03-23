@@ -239,6 +239,14 @@ class AWSM_Geoserver(object):
             self.log.error(msg + " was not found on geoserver.".format(resource))
             sys.exit()
 
+        elif code == 403:
+            self.log.error(msg + " is forbidden to access.".format(resource))
+            sys.exit()
+
+        elif code == 401:
+            self.log.error(msg + " requires credentials with more access.".format(resource))
+            sys.exit()
+
         elif code == 200:
             self.log.debug(msg + " was found successfully!")
 
